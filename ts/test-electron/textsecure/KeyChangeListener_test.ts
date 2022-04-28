@@ -11,8 +11,6 @@ import { SignalProtocolStore } from '../../SignalProtocolStore';
 import type { ConversationModel } from '../../models/conversations';
 import * as KeyChangeListener from '../../textsecure/KeyChangeListener';
 
-const { Whisper } = window;
-
 describe('KeyChangeListener', () => {
   let oldNumberId: string | undefined;
   let oldUuidId: string | undefined;
@@ -55,7 +53,6 @@ describe('KeyChangeListener', () => {
   beforeEach(async () => {
     window.ConversationController.reset();
     await window.ConversationController.load();
-    await window.ConversationController.loadPromise();
 
     convo = window.ConversationController.dangerouslyCreateAndAdd({
       id: uuidWithKeyChange,
@@ -72,11 +69,8 @@ describe('KeyChangeListener', () => {
   afterEach(async () => {
     await window.Signal.Data.removeAllMessagesInConversation(convo.id, {
       logId: uuidWithKeyChange,
-      MessageCollection: Whisper.MessageCollection,
     });
-    await window.Signal.Data.removeConversation(convo.id, {
-      Conversation: Whisper.Conversation,
-    });
+    await window.Signal.Data.removeConversation(convo.id);
 
     await store.removeIdentityKey(new UUID(uuidWithKeyChange));
   });
@@ -108,11 +102,8 @@ describe('KeyChangeListener', () => {
     afterEach(async () => {
       await window.Signal.Data.removeAllMessagesInConversation(groupConvo.id, {
         logId: uuidWithKeyChange,
-        MessageCollection: Whisper.MessageCollection,
       });
-      await window.Signal.Data.removeConversation(groupConvo.id, {
-        Conversation: Whisper.Conversation,
-      });
+      await window.Signal.Data.removeConversation(groupConvo.id);
     });
 
     it('generates a key change notice in the group conversation with this contact', done => {

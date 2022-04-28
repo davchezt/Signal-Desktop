@@ -1,11 +1,15 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import React, { ChangeEventHandler, forwardRef, useState } from 'react';
+import type { ChangeEventHandler } from 'react';
+import React, { forwardRef, useState } from 'react';
 
-import { AttachmentType } from '../types/Attachment';
+import type {
+  InMemoryAttachmentDraftType,
+  AttachmentDraftType,
+} from '../types/Attachment';
 import { AttachmentToastType } from '../types/AttachmentToastType';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 
 import { ToastCannotMixImageAndNonImageAttachments } from './ToastCannotMixImageAndNonImageAttachments';
 import { ToastDangerousFileType } from './ToastDangerousFileType';
@@ -18,14 +22,14 @@ import type { HandleAttachmentsProcessingArgsType } from '../util/handleAttachme
 export type PropsType = {
   addAttachment: (
     conversationId: string,
-    attachment: AttachmentType
+    attachment: InMemoryAttachmentDraftType
   ) => unknown;
   addPendingAttachment: (
     conversationId: string,
-    pendingAttachment: AttachmentType
+    pendingAttachment: AttachmentDraftType
   ) => unknown;
   conversationId: string;
-  draftAttachments: ReadonlyArray<AttachmentType>;
+  draftAttachments: ReadonlyArray<AttachmentDraftType>;
   i18n: LocalizerType;
   processAttachments: (options: HandleAttachmentsProcessingArgsType) => unknown;
   removeAttachment: (conversationId: string, filePath: string) => unknown;
@@ -48,7 +52,9 @@ export const CompositionUpload = forwardRef<HTMLInputElement, PropsType>(
       AttachmentToastType | undefined
     >();
 
-    const onFileInputChange: ChangeEventHandler<HTMLInputElement> = async event => {
+    const onFileInputChange: ChangeEventHandler<
+      HTMLInputElement
+    > = async event => {
       const files = event.target.files || [];
 
       await processAttachments({

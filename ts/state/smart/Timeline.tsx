@@ -1,36 +1,38 @@
-// Copyright 2019-2021 Signal Messenger, LLC
+// Copyright 2019-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { isEmpty, mapValues, pick } from 'lodash';
-import React, { RefObject } from 'react';
+import type { RefObject } from 'react';
+import React from 'react';
 import { connect } from 'react-redux';
-import memoizee from 'memoizee';
 
 import { mapDispatchToProps } from '../actions';
-import {
+import type {
   PropsActionsType as TimelineActionsType,
   ContactSpoofingReviewPropType,
-  Timeline,
   WarningType as TimelineWarningType,
+  PropsType as ComponentPropsType,
 } from '../../components/conversation/Timeline';
-import { StateType } from '../reducer';
-import { ConversationType } from '../ducks/conversations';
+import { Timeline } from '../../components/conversation/Timeline';
+import type { StateType } from '../reducer';
+import type { ConversationType } from '../ducks/conversations';
 
-import { getIntl } from '../selectors/user';
+import { getIntl, getTheme } from '../selectors/user';
 import {
-  getConversationByIdSelector,
+  getConversationByUuidSelector,
   getConversationMessagesSelector,
   getConversationSelector,
   getConversationsByTitleSelector,
   getInvitedContactsForNewlyCreatedGroup,
+  getMessageSelector,
   getSelectedMessage,
 } from '../selectors/conversations';
 
 import { SmartTimelineItem } from './TimelineItem';
+import { SmartContactSpoofingReviewDialog } from './ContactSpoofingReviewDialog';
+import type { PropsType as SmartContactSpoofingReviewDialogPropsType } from './ContactSpoofingReviewDialog';
 import { SmartTypingBubble } from './TypingBubble';
-import { SmartLastSeenIndicator } from './LastSeenIndicator';
 import { SmartHeroRow } from './HeroRow';
-import { SmartTimelineLoadingRow } from './TimelineLoadingRow';
 import { renderAudioAttachment } from './renderAudioAttachment';
 import { renderEmojiPicker } from './renderEmojiPicker';
 import { renderReactionPicker } from './renderReactionPicker';
@@ -45,6 +47,9 @@ import {
   invertIdsByTitle,
 } from '../../util/groupMemberNameCollisions';
 import { ContactSpoofingType } from '../../util/contactSpoofing';
+import type { UnreadIndicatorPlacement } from '../../util/timelineUtil';
+import type { WidthBreakpoint } from '../../components/_util';
+import { getPreferredBadgeSelector } from '../selectors/badges';
 
 type ExternalProps = {
   id: string;
@@ -53,70 +58,108 @@ type ExternalProps = {
   //   are provided by ConversationView in setupTimeline().
 };
 
-const createBoundOnHeightChange = memoizee(
-  (
-    onHeightChange: (messageId: string) => unknown,
-    messageId: string
-  ): (() => unknown) => {
-    return () => onHeightChange(messageId);
-  },
-  { max: 500 }
-);
+export type TimelinePropsType = ExternalProps &
+  Pick<
+    ComponentPropsType,
+    | 'acknowledgeGroupMemberNameCollisions'
+    | 'contactSupport'
+    | 'blockGroupLinkRequests'
+    | 'deleteMessage'
+    | 'deleteMessageForEveryone'
+    | 'displayTapToViewMessage'
+    | 'downloadAttachment'
+    | 'downloadNewVersion'
+    | 'kickOffAttachmentDownload'
+    | 'learnMoreAboutDeliveryIssue'
+    | 'loadAndScroll'
+    | 'loadNewerMessages'
+    | 'loadNewestMessages'
+    | 'loadOlderMessages'
+    | 'markAttachmentAsCorrupted'
+    | 'markMessageRead'
+    | 'markViewed'
+    | 'onBlock'
+    | 'onBlockAndReportSpam'
+    | 'onDelete'
+    | 'onUnblock'
+    | 'openConversation'
+    | 'openLink'
+    | 'reactToMessage'
+    | 'removeMember'
+    | 'replyToMessage'
+    | 'retryDeleteForEveryone'
+    | 'retrySend'
+    | 'scrollToQuotedMessage'
+    | 'showContactDetail'
+    | 'showContactModal'
+    | 'showExpiredIncomingTapToViewToast'
+    | 'showExpiredOutgoingTapToViewToast'
+    | 'showForwardMessageModal'
+    | 'showIdentity'
+    | 'showMessageDetail'
+    | 'showVisualAttachment'
+    | 'startConversation'
+    | 'unblurAvatar'
+    | 'updateSharedGroups'
+  >;
 
 function renderItem({
   actionProps,
   containerElementRef,
+  containerWidthBreakpoint,
   conversationId,
+  isOldestTimelineItem,
   messageId,
   nextMessageId,
-  onHeightChange,
   previousMessageId,
+  unreadIndicatorPlacement,
 }: {
   actionProps: TimelineActionsType;
   containerElementRef: RefObject<HTMLElement>;
+  containerWidthBreakpoint: WidthBreakpoint;
   conversationId: string;
+  isOldestTimelineItem: boolean;
   messageId: string;
   nextMessageId: undefined | string;
-  onHeightChange: (messageId: string) => unknown;
   previousMessageId: undefined | string;
+  unreadIndicatorPlacement: undefined | UnreadIndicatorPlacement;
 }): JSX.Element {
   return (
     <SmartTimelineItem
       {...actionProps}
       containerElementRef={containerElementRef}
+      containerWidthBreakpoint={containerWidthBreakpoint}
       conversationId={conversationId}
+      isOldestTimelineItem={isOldestTimelineItem}
       messageId={messageId}
       previousMessageId={previousMessageId}
       nextMessageId={nextMessageId}
-      onHeightChange={createBoundOnHeightChange(onHeightChange, messageId)}
       renderEmojiPicker={renderEmojiPicker}
       renderReactionPicker={renderReactionPicker}
       renderAudioAttachment={renderAudioAttachment}
+      unreadIndicatorPlacement={unreadIndicatorPlacement}
     />
   );
 }
 
-function renderLastSeenIndicator(id: string): JSX.Element {
-  return <SmartLastSeenIndicator id={id} />;
+function renderContactSpoofingReviewDialog(
+  props: SmartContactSpoofingReviewDialogPropsType
+): JSX.Element {
+  return <SmartContactSpoofingReviewDialog {...props} />;
 }
 
 function renderHeroRow(
   id: string,
-  onHeightChange: () => unknown,
   unblurAvatar: () => void,
   updateSharedGroups: () => unknown
 ): JSX.Element {
   return (
     <SmartHeroRow
       id={id}
-      onHeightChange={onHeightChange}
       unblurAvatar={unblurAvatar}
       updateSharedGroups={updateSharedGroups}
     />
   );
-}
-function renderLoadingRow(id: string): JSX.Element {
-  return <SmartTimelineLoadingRow id={id} />;
 }
 function renderTypingBubble(id: string): JSX.Element {
   return <SmartTypingBubble id={id} />;
@@ -129,9 +172,8 @@ const getWarning = (
   switch (conversation.type) {
     case 'direct':
       if (!conversation.acceptedMessageRequest && !conversation.isBlocked) {
-        const getConversationsWithTitle = getConversationsByTitleSelector(
-          state
-        );
+        const getConversationsWithTitle =
+          getConversationsByTitleSelector(state);
         const conversationsWithSameTitle = getConversationsWithTitle(
           conversation.title
         );
@@ -160,11 +202,11 @@ const getWarning = (
         return undefined;
       }
 
-      const getConversationById = getConversationByIdSelector(state);
+      const getConversationByUuid = getConversationByUuidSelector(state);
 
       const { memberships } = getGroupMemberships(
         conversation,
-        getConversationById
+        getConversationByUuid
       );
       const groupNameCollisions = getCollisionsFromMemberships(memberships);
       const hasGroupMembersWithSameName = !isEmpty(groupNameCollisions);
@@ -173,9 +215,8 @@ const getWarning = (
           type: ContactSpoofingType.MultipleGroupMembersWithSameTitle,
           acknowledgedGroupNameCollisions:
             conversation.acknowledgedGroupNameCollisions || {},
-          groupNameCollisions: dehydrateCollisionsWithConversations(
-            groupNameCollisions
-          ),
+          groupNameCollisions:
+            dehydrateCollisionsWithConversations(groupNameCollisions),
         };
       }
 
@@ -196,7 +237,7 @@ const getContactSpoofingReview = (
   }
 
   const conversationSelector = getConversationSelector(state);
-  const getConversationById = getConversationByIdSelector(state);
+  const getConversationByUuid = getConversationByUuidSelector(state);
 
   const currentConversation = conversationSelector(selectedConversationId);
 
@@ -212,7 +253,7 @@ const getContactSpoofingReview = (
     case ContactSpoofingType.MultipleGroupMembersWithSameTitle: {
       const { memberships } = getGroupMemberships(
         currentConversation,
-        getConversationById
+        getConversationByUuid
       );
       const groupNameCollisions = getCollisionsFromMemberships(memberships);
 
@@ -247,32 +288,34 @@ const mapStateToProps = (state: StateType, props: ExternalProps) => {
   const conversationMessages = getConversationMessagesSelector(state)(id);
   const selectedMessage = getSelectedMessage(state);
 
+  const messageSelector = getMessageSelector(state);
+  const getTimestampForMessage = (messageId: string): undefined | number =>
+    messageSelector(messageId)?.timestamp;
+
   return {
     id,
-    ...pick(conversation, [
-      'areWeAdmin',
-      'unreadCount',
-      'typingContact',
-      'isGroupV1AndDisabled',
-    ]),
+    ...pick(conversation, ['unreadCount', 'isGroupV1AndDisabled']),
+    isConversationSelected: state.conversations.selectedConversationId === id,
     isIncomingMessageRequest: Boolean(
       conversation.messageRequestsEnabled &&
         !conversation.acceptedMessageRequest
     ),
+    isSomeoneTyping: Boolean(conversation.typingContactId),
     ...conversationMessages,
-    invitedContactsForNewlyCreatedGroup: getInvitedContactsForNewlyCreatedGroup(
-      state
-    ),
+    invitedContactsForNewlyCreatedGroup:
+      getInvitedContactsForNewlyCreatedGroup(state),
     selectedMessageId: selectedMessage ? selectedMessage.id : undefined,
 
     warning: getWarning(conversation, state),
     contactSpoofingReview: getContactSpoofingReview(id, state),
 
+    getTimestampForMessage,
+    getPreferredBadge: getPreferredBadgeSelector(state),
     i18n: getIntl(state),
+    theme: getTheme(state),
     renderItem,
-    renderLastSeenIndicator,
+    renderContactSpoofingReviewDialog,
     renderHeroRow,
-    renderLoadingRow,
     renderTypingBubble,
     ...actions,
   };

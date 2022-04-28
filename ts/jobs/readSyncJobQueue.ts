@@ -1,16 +1,15 @@
-// Copyright 2021 Signal Messenger, LLC
+// Copyright 2021-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
-
-/* eslint-disable class-methods-use-this */
 
 import * as durations from '../util/durations';
 import type { LoggerType } from '../types/Logging';
 import { exponentialBackoffMaxAttempts } from '../util/exponentialBackoff';
+import type { SyncType } from './helpers/syncHelpers';
 import {
-  SyncType,
+  SyncTypeList,
   parseRawSyncDataArray,
-  runReadOrViewSyncJob,
-} from './helpers/readAndViewSyncHelpers';
+  runSyncJob,
+} from './helpers/syncHelpers';
 import { strictAssert } from '../util/assert';
 import { isRecord } from '../util/isRecord';
 
@@ -33,13 +32,13 @@ export class ReadSyncJobQueue extends JobQueue<ReadSyncJobData> {
     { data, timestamp }: Readonly<{ data: ReadSyncJobData; timestamp: number }>,
     { attempt, log }: Readonly<{ attempt: number; log: LoggerType }>
   ): Promise<void> {
-    await runReadOrViewSyncJob({
+    await runSyncJob({
       attempt,
-      isView: false,
       log,
       maxRetryTime: MAX_RETRY_TIME,
       syncs: data.readSyncs,
       timestamp,
+      type: SyncTypeList.Read,
     });
   }
 }

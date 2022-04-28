@@ -4,9 +4,10 @@
 import React, { useMemo } from 'react';
 import classNames from 'classnames';
 import { v4 as uuid } from 'uuid';
-import { Tooltip, TooltipPlacement } from './Tooltip';
+import type { TooltipPlacement } from './Tooltip';
+import { Tooltip } from './Tooltip';
 import { Theme } from '../util/theme';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 
 export enum CallingButtonType {
   AUDIO_DISABLED = 'AUDIO_DISABLED',
@@ -110,8 +111,8 @@ export const CallingButton = ({
   }
 
   const className = classNames(
-    'module-calling-button__icon',
-    `module-calling-button__icon--${classNameSuffix}`
+    'CallingButton__icon',
+    `CallingButton__icon--${classNameSuffix}`
   );
 
   return (
@@ -122,8 +123,8 @@ export const CallingButton = ({
     >
       <div
         className={classNames(
-          'module-calling-button__container',
-          !isVisible && 'module-calling-button__container--hidden'
+          'CallingButton__container',
+          !isVisible && 'CallingButton__container--hidden'
         )}
       >
         <button
@@ -138,10 +139,7 @@ export const CallingButton = ({
         >
           <div />
         </button>
-        <label
-          className="module-calling-button__label"
-          htmlFor={uniqueButtonId}
-        >
+        <label className="CallingButton__label" htmlFor={uniqueButtonId}>
           {label}
         </label>
       </div>

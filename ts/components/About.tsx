@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import React from 'react';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 import { useEscapeHandling } from '../hooks/useEscapeHandling';
 
 export type PropsType = {
@@ -34,7 +34,7 @@ export const About = ({
         <div>
           <a
             className="acknowledgments"
-            href="https://github.com/signalapp/Signal-Desktop/blob/development/ACKNOWLEDGMENTS.md"
+            href="https://github.com/signalapp/Signal-Desktop/blob/main/ACKNOWLEDGMENTS.md"
           >
             {i18n('softwareAcknowledgments')}
           </a>

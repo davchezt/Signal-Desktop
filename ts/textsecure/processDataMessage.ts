@@ -1,17 +1,16 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import Long from 'long';
 
 import { assert, strictAssert } from '../util/assert';
 import { dropNull, shallowDropNull } from '../util/dropNull';
-import { normalizeNumber } from '../util/normalizeNumber';
 import { SignalService as Proto } from '../protobuf';
 import { deriveGroupFields } from '../groups';
 import * as Bytes from '../Bytes';
 import { deriveMasterKeyFromGroupV1 } from '../Crypto';
 
-import {
+import type {
   ProcessedAttachment,
   ProcessedDataMessage,
   ProcessedGroupContext,
@@ -43,7 +42,7 @@ export function processAttachment(
   }
 
   const { cdnId } = attachment;
-  const hasCdnId = cdnId instanceof Long ? !cdnId.isZero() : Boolean(cdnId);
+  const hasCdnId = Long.isLong(cdnId) ? !cdnId.isZero() : Boolean(cdnId);
 
   return {
     ...shallowDropNull(attachment),
@@ -120,7 +119,7 @@ export function processQuote(
   }
 
   return {
-    id: normalizeNumber(dropNull(quote.id)),
+    id: quote.id?.toNumber(),
     authorUuid: dropNull(quote.authorUuid),
     text: dropNull(quote.text),
     attachments: (quote.attachments ?? []).map(attachment => {
@@ -163,10 +162,8 @@ function isLinkPreviewDateValid(value: unknown): value is number {
   );
 }
 
-function cleanLinkPreviewDate(
-  value?: Long | number | null
-): number | undefined {
-  const result = normalizeNumber(value ?? undefined);
+function cleanLinkPreviewDate(value?: Long | null): number | undefined {
+  const result = value?.toNumber();
   return isLinkPreviewDateValid(result) ? result : undefined;
 }
 
@@ -198,7 +195,7 @@ export function processSticker(
   return {
     packId: sticker.packId ? Bytes.toHex(sticker.packId) : undefined,
     packKey: sticker.packKey ? Bytes.toBase64(sticker.packKey) : undefined,
-    stickerId: normalizeNumber(dropNull(sticker.stickerId)),
+    stickerId: dropNull(sticker.stickerId),
     data: processAttachment(sticker.data),
   };
 }
@@ -214,7 +211,7 @@ export function processReaction(
     emoji: dropNull(reaction.emoji),
     remove: Boolean(reaction.remove),
     targetAuthorUuid: dropNull(reaction.targetAuthorUuid),
-    targetTimestamp: normalizeNumber(dropNull(reaction.targetTimestamp)),
+    targetTimestamp: reaction.targetTimestamp?.toNumber(),
   };
 }
 
@@ -226,7 +223,7 @@ export function processDelete(
   }
 
   return {
-    targetSentTimestamp: normalizeNumber(dropNull(del.targetSentTimestamp)),
+    targetSentTimestamp: del.targetSentTimestamp?.toNumber(),
   };
 }
 
@@ -245,7 +242,7 @@ export async function processDataMessage(
     throw new Error('Missing timestamp on dataMessage');
   }
 
-  const timestamp = normalizeNumber(message.timestamp);
+  const timestamp = message.timestamp?.toNumber();
 
   if (envelopeTimestamp !== timestamp) {
     throw new Error(
@@ -256,31 +253,29 @@ export async function processDataMessage(
 
   const result: ProcessedDataMessage = {
     body: dropNull(message.body),
-    attachments: (
-      message.attachments ?? []
-    ).map((attachment: Proto.IAttachmentPointer) =>
-      processAttachment(attachment)
+    attachments: (message.attachments ?? []).map(
+      (attachment: Proto.IAttachmentPointer) => processAttachment(attachment)
     ),
     group: processGroupContext(message.group),
     groupV2: processGroupV2Context(message.groupV2),
     flags: message.flags ?? 0,
     expireTimer: message.expireTimer ?? 0,
-    profileKey: message.profileKey
-      ? Bytes.toBase64(message.profileKey)
-      : undefined,
+    profileKey:
+      message.profileKey && message.profileKey.length > 0
+        ? Bytes.toBase64(message.profileKey)
+        : undefined,
     timestamp,
     quote: processQuote(message.quote),
     contact: processContact(message.contact),
     preview: processPreview(message.preview),
     sticker: processSticker(message.sticker),
-    requiredProtocolVersion: normalizeNumber(
-      dropNull(message.requiredProtocolVersion)
-    ),
+    requiredProtocolVersion: dropNull(message.requiredProtocolVersion),
     isViewOnce: Boolean(message.isViewOnce),
     reaction: processReaction(message.reaction),
     delete: processDelete(message.delete),
     bodyRanges: message.bodyRanges ?? [],
     groupCallUpdate: dropNull(message.groupCallUpdate),
+    storyContext: dropNull(message.storyContext),
   };
 
   const isEndSession = Boolean(result.flags & FLAGS.END_SESSION);

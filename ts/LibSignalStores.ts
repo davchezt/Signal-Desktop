@@ -2,32 +2,33 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 /* eslint-disable max-classes-per-file */
-/* eslint-disable class-methods-use-this */
 
 import { isNumber } from 'lodash';
 
-import {
+import type {
   Direction,
-  IdentityKeyStore,
   PreKeyRecord,
+  ProtocolAddress,
+  SenderKeyRecord,
+  SessionRecord,
+  SignedPreKeyRecord,
+  Uuid,
+} from '@signalapp/libsignal-client';
+import {
+  IdentityKeyStore,
   PreKeyStore,
   PrivateKey,
-  ProtocolAddress,
   PublicKey,
-  SenderKeyRecord,
   SenderKeyStore,
-  SessionRecord,
   SessionStore,
-  SignedPreKeyRecord,
   SignedPreKeyStore,
-  Uuid,
-} from '@signalapp/signal-client';
+} from '@signalapp/libsignal-client';
 import { freezePreKey, freezeSignedPreKey } from './SignalProtocolStore';
 import { Address } from './types/Address';
 import { QualifiedAddress } from './types/QualifiedAddress';
 import type { UUID } from './types/UUID';
 
-import { Zone } from './util/Zone';
+import type { Zone } from './util/Zone';
 
 function encodeAddress(address: ProtocolAddress): Address {
   const name = address.name();
@@ -213,15 +214,19 @@ export class PreKeys extends PreKeyStore {
 }
 
 export type SenderKeysOptions = Readonly<{
-  ourUuid: UUID;
+  readonly ourUuid: UUID;
+  readonly zone: Zone | undefined;
 }>;
 
 export class SenderKeys extends SenderKeyStore {
   private readonly ourUuid: UUID;
 
-  constructor({ ourUuid }: SenderKeysOptions) {
+  readonly zone: Zone | undefined;
+
+  constructor({ ourUuid, zone }: SenderKeysOptions) {
     super();
     this.ourUuid = ourUuid;
+    this.zone = zone;
   }
 
   async saveSenderKey(
@@ -234,7 +239,8 @@ export class SenderKeys extends SenderKeyStore {
     await window.textsecure.storage.protocol.saveSenderKey(
       encodedAddress,
       distributionId,
-      record
+      record,
+      { zone: this.zone }
     );
   }
 
@@ -246,7 +252,8 @@ export class SenderKeys extends SenderKeyStore {
 
     const senderKey = await window.textsecure.storage.protocol.getSenderKey(
       encodedAddress,
-      distributionId
+      distributionId,
+      { zone: this.zone }
     );
 
     return senderKey || null;
@@ -278,10 +285,11 @@ export class SignedPreKeys extends SignedPreKeyStore {
   }
 
   async getSignedPreKey(id: number): Promise<SignedPreKeyRecord> {
-    const signedPreKey = await window.textsecure.storage.protocol.loadSignedPreKey(
-      this.ourUuid,
-      id
-    );
+    const signedPreKey =
+      await window.textsecure.storage.protocol.loadSignedPreKey(
+        this.ourUuid,
+        id
+      );
 
     if (!signedPreKey) {
       throw new Error(`getSignedPreKey: SignedPreKey ${id} not found`);

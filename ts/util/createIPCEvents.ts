@@ -4,20 +4,18 @@
 import { webFrame } from 'electron';
 import type { AudioDevice } from 'ringrtc';
 
-import { ZoomFactorType } from '../types/Storage.d';
-import {
-  DEFAULT_CONVERSATION_COLOR,
+import type { ZoomFactorType } from '../types/Storage.d';
+import type {
   ConversationColorType,
   CustomColorType,
   DefaultConversationColorType,
 } from '../types/Colors';
+import { DEFAULT_CONVERSATION_COLOR } from '../types/Colors';
 import * as Stickers from '../types/Stickers';
-import {
-  SystemTraySetting,
-  parseSystemTraySetting,
-} from '../types/SystemTraySetting';
+import type { SystemTraySetting } from '../types/SystemTraySetting';
+import { parseSystemTraySetting } from '../types/SystemTraySetting';
 
-import { ConversationType } from '../state/ducks/conversations';
+import type { ConversationType } from '../state/ducks/conversations';
 import { calling } from '../services/calling';
 import { getConversationsWithCustomColorSelector } from '../state/selectors/conversations';
 import { getCustomColors } from '../state/selectors/items';
@@ -99,6 +97,7 @@ export type IPCEventsCallbacksType = {
   showConversationViaSignalDotMe: (hash: string) => void;
   showKeyboardShortcuts: () => void;
   showGroupViaLink: (x: string) => Promise<void>;
+  showReleaseNotes: () => void;
   showStickerPack: (packId: string, key: string) => void;
   shutdown: () => Promise<void>;
   unknownSignalLink: () => void;
@@ -115,7 +114,7 @@ export type IPCEventsCallbacksType = {
 type ValuesWithGetters = Omit<
   IPCEventsValuesType,
   // Optional
-  'mediaPermissions' | 'mediaCameraPermissions'
+  'mediaPermissions' | 'mediaCameraPermissions' | 'autoLaunch'
 >;
 
 type ValuesWithSetters = Omit<
@@ -134,19 +133,18 @@ type ValuesWithSetters = Omit<
   | 'mediaCameraPermissions'
 >;
 
-export type IPCEventGetterType<
-  Key extends keyof IPCEventsValuesType
-> = `get${Capitalize<Key>}`;
+export type IPCEventGetterType<Key extends keyof IPCEventsValuesType> =
+  `get${Capitalize<Key>}`;
 
-export type IPCEventSetterType<
-  Key extends keyof IPCEventsValuesType
-> = `set${Capitalize<Key>}`;
+export type IPCEventSetterType<Key extends keyof IPCEventsValuesType> =
+  `set${Capitalize<Key>}`;
 
 export type IPCEventsGettersType = {
   [Key in keyof ValuesWithGetters as IPCEventGetterType<Key>]: () => ValuesWithGetters[Key];
 } & {
   getMediaPermissions?: () => Promise<boolean>;
   getMediaCameraPermissions?: () => Promise<boolean>;
+  getAutoLaunch?: () => Promise<boolean>;
 };
 
 export type IPCEventsSettersType = {
@@ -214,11 +212,8 @@ export function createIPCEvents(
 
     // Getters only
     getAvailableIODevices: async () => {
-      const {
-        availableCameras,
-        availableMicrophones,
-        availableSpeakers,
-      } = await calling.getAvailableIODevices();
+      const { availableCameras, availableMicrophones, availableSpeakers } =
+        await calling.getAvailableIODevices();
 
       return {
         // mapping it to a pojo so that it is IPC friendly
@@ -263,11 +258,7 @@ export function createIPCEvents(
       window.storage.get('auto-download-update', true),
     setAutoDownloadUpdate: value =>
       window.storage.put('auto-download-update', value),
-    getThemeSetting: () =>
-      window.storage.get(
-        'theme-setting',
-        window.platform === 'darwin' ? 'system' : 'light'
-      ),
+    getThemeSetting: () => window.storage.get('theme-setting', 'system'),
     setThemeSetting: value => {
       const promise = window.storage.put('theme-setting', value);
       themeChanged();
@@ -331,7 +322,7 @@ export function createIPCEvents(
 
     getAutoLaunch: () => window.getAutoLaunch(),
     setAutoLaunch: async (value: boolean) => {
-      window.setAutoLaunch(value);
+      return window.setAutoLaunch(value);
     },
 
     isPhoneNumberSharingEnabled: () => isPhoneNumberSharingEnabled(),
@@ -352,7 +343,8 @@ export function createIPCEvents(
       await universalExpireTimer.set(newValue);
 
       // Update account in Storage Service
-      const conversationId = window.ConversationController.getOurConversationIdOrThrow();
+      const conversationId =
+        window.ConversationController.getOurConversationIdOrThrow();
       const account = window.ConversationController.get(conversationId);
       assert(account, "Account wasn't found");
 
@@ -380,13 +372,13 @@ export function createIPCEvents(
     showKeyboardShortcuts: () => window.showKeyboardShortcuts(),
 
     deleteAllData: async () => {
-      await window.sqlInitializer.goBackToMainProcess();
+      await window.Signal.Data.goBackToMainProcess();
 
       renderClearingDataView();
     },
 
     closeDB: async () => {
-      await window.sqlInitializer.goBackToMainProcess();
+      await window.Signal.Data.goBackToMainProcess();
     },
 
     showStickerPack: (packId, key) => {
@@ -505,6 +497,10 @@ export function createIPCEvents(
     },
 
     shutdown: () => Promise.resolve(),
+    showReleaseNotes: () => {
+      const { showWhatsNewModal } = window.reduxActions.globalModals;
+      showWhatsNewModal();
+    },
 
     getMediaPermissions: window.getMediaPermissions,
     getMediaCameraPermissions: window.getMediaCameraPermissions,

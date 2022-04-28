@@ -1,4 +1,4 @@
-// Copyright 2017-2021 Signal Messenger, LLC
+// Copyright 2017-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 /* global Whisper, window */
@@ -14,26 +14,16 @@ try {
   const _ = require('lodash');
   const { strictAssert } = require('./ts/util/assert');
   const { parseIntWithFallback } = require('./ts/util/parseIntWithFallback');
+  const { UUIDKind } = require('./ts/types/UUID');
 
   // It is important to call this as early as possible
-  require('./ts/windows/context');
+  const { SignalContext } = require('./ts/windows/context');
+  window.i18n = SignalContext.i18n;
 
-  const {
-    getEnvironment,
-    setEnvironment,
-    parseEnvironment,
-    Environment,
-  } = require('./ts/environment');
+  const { getEnvironment, Environment } = require('./ts/environment');
   const ipc = electron.ipcRenderer;
 
-  const { remote } = electron;
-  const { app } = remote;
-
-  window.sqlInitializer = require('./ts/sql/initialize');
-
   const config = require('url').parse(window.location.toString(), true).query;
-
-  setEnvironment(parseEnvironment(config.environment));
 
   const log = require('./ts/logging/log');
 
@@ -76,15 +66,16 @@ try {
     }
     return localBuildExpiration;
   };
-  window.getNodeVersion = () => config.node_version;
   window.getHostName = () => config.hostname;
   window.getServerTrustRoot = () => config.serverTrustRoot;
   window.getServerPublicParams = () => config.serverPublicParams;
   window.getSfuUrl = () => config.sfuUrl;
   window.isBehindProxy = () => Boolean(config.proxyUrl);
-  window.getAutoLaunch = () => app.getLoginItemSettings().openAtLogin;
+  window.getAutoLaunch = () => {
+    return ipc.invoke('get-auto-launch');
+  };
   window.setAutoLaunch = value => {
-    app.setLoginItemSettings({ openAtLogin: Boolean(value) });
+    return ipc.invoke('set-auto-launch', value);
   };
 
   window.isBeforeVersion = (toCheck, baseVersion) => {
@@ -110,8 +101,6 @@ try {
     }
   };
 
-  const localeMessages = ipc.sendSync('locale-data');
-
   window.setBadgeCount = count => ipc.send('set-badge-count', count);
 
   let connectStartTime = 0;
@@ -131,8 +120,12 @@ try {
 
   // We never do these in our code, so we'll prevent it everywhere
   window.open = () => null;
-  // eslint-disable-next-line no-eval, no-multi-assign
-  window.eval = global.eval = () => null;
+
+  // Playwright uses `eval` for `.evaluate()` API
+  if (!config.enableCI && config.environment !== 'test') {
+    // eslint-disable-next-line no-eval, no-multi-assign
+    window.eval = global.eval = () => null;
+  }
 
   window.drawAttention = () => {
     log.info('draw attention');
@@ -194,6 +187,7 @@ try {
     }
 
     const ourUuid = window.textsecure.storage.user.getUuid();
+    const ourPni = window.textsecure.storage.user.getUuid(UUIDKind.PNI);
 
     event.sender.send('additional-log-data-response', {
       capabilities: ourCapabilities || {},
@@ -207,6 +201,7 @@ try {
         deviceId: window.textsecure.storage.user.getDeviceId(),
         e164: window.textsecure.storage.user.getNumber(),
         uuid: ourUuid && ourUuid.toString(),
+        pni: ourPni && ourPni.toString(),
         conversationId: ourConversation && ourConversation.id,
       },
     });
@@ -232,6 +227,10 @@ try {
     Whisper.events.trigger('powerMonitorResume');
   });
 
+  ipc.on('power-channel:lock-screen', () => {
+    Whisper.events.trigger('powerMonitorLockScreen');
+  });
+
   window.sendChallengeRequest = request =>
     ipc.send('challenge:request', request);
 
@@ -251,9 +250,8 @@ try {
   // Settings-related events
 
   window.showSettings = () => ipc.send('show-settings');
-  window.showPermissionsPopup = () => ipc.send('show-permissions-popup');
-  window.showCallingPermissionsPopup = forCamera =>
-    ipc.invoke('show-calling-permissions-popup', forCamera);
+  window.showPermissionsPopup = (forCalling, forCamera) =>
+    ipc.invoke('show-permissions-popup', forCalling, forCamera);
 
   ipc.on('show-keyboard-shortcuts', () => {
     window.Events.showKeyboardShortcuts();
@@ -352,12 +350,17 @@ try {
     }
   });
 
+  ipc.on('show-release-notes', () => {
+    const { showReleaseNotes } = window.Events;
+    if (showReleaseNotes) {
+      showReleaseNotes();
+    }
+  });
+
   window.addSetupMenuItems = () => ipc.send('add-setup-menu-items');
   window.removeSetupMenuItems = () => ipc.send('remove-setup-menu-items');
 
   // We pull these dependencies in now, from here, because they have Node.js dependencies
-
-  require('./ts/logging/set_up_renderer_logging').initialize();
 
   if (config.proxyUrl) {
     log.info('Using provided proxy url');
@@ -371,9 +374,14 @@ try {
   window.WebAPI = window.textsecure.WebAPI.initialize({
     url: config.serverUrl,
     storageUrl: config.storageUrl,
+    updatesUrl: config.updatesUrl,
+    directoryVersion: parseInt(config.directoryVersion, 10),
     directoryUrl: config.directoryUrl,
     directoryEnclaveId: config.directoryEnclaveId,
     directoryTrustAnchor: config.directoryTrustAnchor,
+    directoryV2Url: config.directoryV2Url,
+    directoryV2PublicKey: config.directoryV2PublicKey,
+    directoryV2CodeHashes: (config.directoryV2CodeHashes || '').split(','),
     cdnUrlObject: {
       0: config.cdnUrl0,
       2: config.cdnUrl2,
@@ -384,48 +392,39 @@ try {
     version: config.version,
   });
 
-  // Linux seems to periodically let the event loop stop, so this is a global workaround
-  setInterval(() => {
-    window.nodeSetImmediate(() => {});
-  }, 1000);
-
   const { imageToBlurHash } = require('./ts/util/imageToBlurHash');
-  const { isValidGuid } = require('./ts/util/isValidGuid');
   const { ActiveWindowService } = require('./ts/services/ActiveWindowService');
 
   window.imageToBlurHash = imageToBlurHash;
-  window.emojiData = require('emoji-datasource');
-  window.libphonenumber = require('google-libphonenumber').PhoneNumberUtil.getInstance();
-  window.libphonenumber.PhoneNumberFormat = require('google-libphonenumber').PhoneNumberFormat;
-  window.getGuid = require('uuid/v4');
+  window.libphonenumber =
+    require('google-libphonenumber').PhoneNumberUtil.getInstance();
+  window.libphonenumber.PhoneNumberFormat =
+    require('google-libphonenumber').PhoneNumberFormat;
 
   const activeWindowService = new ActiveWindowService();
   activeWindowService.initialize(window.document, ipc);
   window.isActive = activeWindowService.isActive.bind(activeWindowService);
-  window.registerForActive = activeWindowService.registerForActive.bind(
-    activeWindowService
-  );
-  window.unregisterForActive = activeWindowService.unregisterForActive.bind(
-    activeWindowService
-  );
+  window.registerForActive =
+    activeWindowService.registerForActive.bind(activeWindowService);
+  window.unregisterForActive =
+    activeWindowService.unregisterForActive.bind(activeWindowService);
 
   window.Accessibility = {
     reducedMotionSetting: Boolean(config.reducedMotionSetting),
   };
 
-  window.isValidGuid = isValidGuid;
-
   window.React = require('react');
   window.ReactDOM = require('react-dom');
+
   window.moment = require('moment');
+  require('moment/min/locales.min');
+
   window.PQueue = require('p-queue').default;
 
   const Signal = require('./js/modules/signal');
-  const { setupI18n } = require('./ts/util/setupI18n');
-  const Attachments = require('./app/attachments');
+  const Attachments = require('./ts/windows/attachments');
 
   const { locale } = config;
-  window.i18n = setupI18n(locale, localeMessages);
   window.moment.updateLocale(locale, {
     relativeTime: {
       s: window.i18n('timestamp_s'),
@@ -435,7 +434,7 @@ try {
   });
   window.moment.locale(locale);
 
-  const userDataPath = app.getPath('userData');
+  const userDataPath = SignalContext.getPath('userData');
   window.baseAttachmentsPath = Attachments.getPath(userDataPath);
   window.baseStickersPath = Attachments.getStickersPath(userDataPath);
   window.baseTempPath = Attachments.getTempPath(userDataPath);
@@ -444,6 +443,9 @@ try {
   const { addSensitivePath } = require('./ts/util/privacy');
 
   addSensitivePath(window.baseAttachmentsPath);
+  if (config.crashDumpsPath) {
+    addSensitivePath(config.crashDumpsPath);
+  }
 
   window.Signal = Signal.setup({
     Attachments,
@@ -453,9 +455,8 @@ try {
   });
 
   if (config.enableCI) {
-    const { CI, electronRequire } = require('./ts/CI');
+    const { CI } = require('./ts/CI');
     window.CI = new CI(title);
-    window.electronRequire = electronRequire;
   }
 
   // these need access to window.Signal:
@@ -465,9 +466,6 @@ try {
   require('./ts/backbone/views/whisper_view');
   require('./ts/views/conversation_view');
   require('./ts/views/inbox_view');
-  require('./ts/views/install_view');
-  require('./ts/views/recorder_view');
-  require('./ts/views/standalone_registration_view');
   require('./ts/SignalProtocolStore');
   require('./ts/background');
 

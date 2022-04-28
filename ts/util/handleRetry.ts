@@ -1,12 +1,13 @@
-// Copyright 2021 Signal Messenger, LLC
+// Copyright 2021-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import {
   DecryptionErrorMessage,
   PlaintextContent,
-} from '@signalapp/signal-client';
+} from '@signalapp/libsignal-client';
 import { isNumber } from 'lodash';
 
+import * as Bytes from '../Bytes';
 import { isProduction } from './version';
 import { strictAssert } from './assert';
 import { getSendOptions } from './getSendOptions';
@@ -19,9 +20,10 @@ import { Address } from '../types/Address';
 import { QualifiedAddress } from '../types/QualifiedAddress';
 import { ToastDecryptionError } from '../components/ToastDecryptionError';
 import { showToast } from './showToast';
+import * as Errors from '../types/errors';
 
-import { ConversationModel } from '../models/conversations';
-import {
+import type { ConversationModel } from '../models/conversations';
+import type {
   DecryptionErrorEvent,
   DecryptionErrorEventData,
   RetryRequestEvent,
@@ -31,10 +33,23 @@ import {
 import { SignalService as Proto } from '../protobuf';
 import * as log from '../logging/log';
 
+const RETRY_LIMIT = 5;
+
+// Note: Neither of the the two functions onRetryRequest and onDecrytionError use a job
+//   queue to make sure sends are reliable. That's unnecessary because these tasks are
+//   tied to incoming message processing queue, and will only confirm() completion on
+//   successful send.
+
 // Entrypoints
 
+const retryRecord = new Map<number, number>();
+
+export function _getRetryRecord(): Map<number, number> {
+  return retryRecord;
+}
+
 export async function onRetryRequest(event: RetryRequestEvent): Promise<void> {
-  const { retryRequest } = event;
+  const { confirm, retryRequest } = event;
   const {
     groupId: requestGroupId,
     requesterDevice,
@@ -50,6 +65,17 @@ export async function onRetryRequest(event: RetryRequestEvent): Promise<void> {
     log.warn(
       `onRetryRequest/${logId}: Feature flag disabled, returning early.`
     );
+    confirm();
+    return;
+  }
+
+  const retryCount = (retryRecord.get(sentAt) || 0) + 1;
+  retryRecord.set(sentAt, retryCount);
+  if (retryCount > RETRY_LIMIT) {
+    log.warn(
+      `onRetryRequest/${logId}: retryCount is ${retryCount}; returning early.`
+    );
+    confirm();
     return;
   }
 
@@ -73,13 +99,14 @@ export async function onRetryRequest(event: RetryRequestEvent): Promise<void> {
     );
   }
 
-  await archiveSessionOnMatch(retryRequest);
+  const didArchive = await archiveSessionOnMatch(retryRequest);
 
   if (isOlderThan(sentAt, retryRespondMaxAge)) {
     log.info(
       `onRetryRequest/${logId}: Message is too old, refusing to send again.`
     );
-    await sendDistributionMessageOrNullMessage(logId, retryRequest);
+    await sendDistributionMessageOrNullMessage(logId, retryRequest, didArchive);
+    confirm();
     return;
   }
 
@@ -91,7 +118,8 @@ export async function onRetryRequest(event: RetryRequestEvent): Promise<void> {
 
   if (!sentProto) {
     log.info(`onRetryRequest/${logId}: Did not find sent proto`);
-    await sendDistributionMessageOrNullMessage(logId, retryRequest);
+    await sendDistributionMessageOrNullMessage(logId, retryRequest, didArchive);
+    confirm();
     return;
   }
 
@@ -105,6 +133,7 @@ export async function onRetryRequest(event: RetryRequestEvent): Promise<void> {
     messageIds,
     requestGroupId,
     requesterUuid,
+    timestamp,
   });
 
   const recipientConversation = window.ConversationController.getOrCreate(
@@ -125,15 +154,24 @@ export async function onRetryRequest(event: RetryRequestEvent): Promise<void> {
     messageIds: [],
     sendType: 'resendFromLog',
   });
+
+  confirm();
+  log.info(`onRetryRequest/${logId}: Resend complete.`);
 }
 
-function maybeShowDecryptionToast(logId: string) {
+function maybeShowDecryptionToast(
+  logId: string,
+  name: string,
+  deviceId: number
+) {
   if (isProduction(window.getVersion())) {
     return;
   }
 
   log.info(`maybeShowDecryptionToast/${logId}: Showing decryption error toast`);
   showToast(ToastDecryptionError, {
+    deviceId,
+    name,
     onShowDebugLog: () => window.showDebugLog(),
   });
 }
@@ -141,11 +179,21 @@ function maybeShowDecryptionToast(logId: string) {
 export async function onDecryptionError(
   event: DecryptionErrorEvent
 ): Promise<void> {
-  const { decryptionError } = event;
+  const { confirm, decryptionError } = event;
   const { senderUuid, senderDevice, timestamp } = decryptionError;
   const logId = `${senderUuid}.${senderDevice} ${timestamp}`;
 
   log.info(`onDecryptionError/${logId}: Starting...`);
+
+  const retryCount = (retryRecord.get(timestamp) || 0) + 1;
+  retryRecord.set(timestamp, retryCount);
+  if (retryCount > RETRY_LIMIT) {
+    log.warn(
+      `onDecryptionError/${logId}: retryCount is ${retryCount}; returning early.`
+    );
+    confirm();
+    return;
+  }
 
   const conversation = window.ConversationController.getOrCreate(
     senderUuid,
@@ -155,7 +203,8 @@ export async function onDecryptionError(
     await conversation.getProfiles();
   }
 
-  maybeShowDecryptionToast(logId);
+  const name = conversation.getTitle();
+  maybeShowDecryptionToast(logId, name, senderDevice);
 
   if (
     conversation.get('capabilities')?.senderKey &&
@@ -166,6 +215,7 @@ export async function onDecryptionError(
     await startAutomaticSessionReset(decryptionError);
   }
 
+  confirm();
   log.info(`onDecryptionError/${logId}: ...complete`);
 }
 
@@ -176,13 +226,13 @@ async function archiveSessionOnMatch({
   requesterUuid,
   requesterDevice,
   senderDevice,
-}: RetryRequestEventData): Promise<void> {
+}: RetryRequestEventData): Promise<boolean> {
   const ourDeviceId = parseIntOrThrow(
     window.textsecure.storage.user.getDeviceId(),
     'archiveSessionOnMatch/getDeviceId'
   );
   if (ourDeviceId !== senderDevice || !ratchetKey) {
-    return;
+    return false;
   }
 
   const ourUuid = window.textsecure.storage.user.getCheckedUuid();
@@ -197,13 +247,18 @@ async function archiveSessionOnMatch({
       'archiveSessionOnMatch: Matching device and ratchetKey, archiving session'
     );
     await window.textsecure.storage.protocol.archiveSession(address);
+    return true;
   }
+
+  return false;
 }
 
 async function sendDistributionMessageOrNullMessage(
   logId: string,
-  options: RetryRequestEventData
+  options: RetryRequestEventData,
+  didArchive: boolean
 ): Promise<void> {
+  const { ContentHint } = Proto.UnidentifiedSenderMessage.Message;
   const { groupId, requesterUuid } = options;
   let sentDistributionMessage = false;
   log.info(`sendDistributionMessageOrNullMessage/${logId}: Starting...`);
@@ -212,6 +267,7 @@ async function sendDistributionMessageOrNullMessage(
     requesterUuid,
     'private'
   );
+  const sendOptions = await getSendOptions(conversation.attributes);
 
   if (groupId) {
     const group = window.ConversationController.get(groupId);
@@ -229,20 +285,19 @@ async function sendDistributionMessageOrNullMessage(
       );
 
       try {
-        const { ContentHint } = Proto.UnidentifiedSenderMessage.Message;
-
-        const result = await handleMessageSend(
-          window.textsecure.messaging.sendSenderKeyDistributionMessage({
-            contentHint: ContentHint.RESENDABLE,
-            distributionId,
-            groupId,
-            identifiers: [requesterUuid],
-          }),
+        await handleMessageSend(
+          window.textsecure.messaging.sendSenderKeyDistributionMessage(
+            {
+              contentHint: ContentHint.RESENDABLE,
+              distributionId,
+              groupId,
+              identifiers: [requesterUuid],
+              throwIfNotInDatabase: true,
+            },
+            sendOptions
+          ),
           { messageIds: [], sendType: 'senderKeyDistributionMessage' }
         );
-        if (result && result.errors && result.errors.length > 0) {
-          throw result.errors[0];
-        }
         sentDistributionMessage = true;
       } catch (error) {
         log.error(
@@ -254,26 +309,37 @@ async function sendDistributionMessageOrNullMessage(
   }
 
   if (!sentDistributionMessage) {
+    if (!didArchive) {
+      log.info(
+        `sendDistributionMessageOrNullMessage/${logId}: Did't send distribution message and didn't archive session. Returning early.`
+      );
+      return;
+    }
+
     log.info(
       `sendDistributionMessageOrNullMessage/${logId}: Did not send distribution message, sending null message`
     );
 
+    // Enqueue a null message using the newly-created session
     try {
-      const sendOptions = await getSendOptions(conversation.attributes);
-      const result = await handleMessageSend(
-        window.textsecure.messaging.sendNullMessage(
-          { uuid: requesterUuid },
-          sendOptions
-        ),
-        { messageIds: [], sendType: 'nullMessage' }
+      const nullMessage = window.textsecure.messaging.getNullMessage({
+        uuid: requesterUuid,
+      });
+      await handleMessageSend(
+        window.textsecure.messaging.sendIndividualProto({
+          ...nullMessage,
+          options: sendOptions,
+          proto: Proto.Content.decode(
+            Bytes.fromBase64(nullMessage.protoBase64)
+          ),
+          timestamp: Date.now(),
+        }),
+        { messageIds: [], sendType: nullMessage.type }
       );
-      if (result && result.errors && result.errors.length > 0) {
-        throw result.errors[0];
-      }
     } catch (error) {
       log.error(
-        `maybeSendDistributionMessage/${logId}: Failed to send null message`,
-        error && error.stack ? error.stack : error
+        'sendDistributionMessageOrNullMessage: Failed to send null message',
+        Errors.toLogFormat(error)
       );
     }
   }
@@ -294,18 +360,16 @@ async function getRetryConversation({
   }
 
   const [messageId] = messageIds;
-  const message = await window.Signal.Data.getMessageById(messageId, {
-    Message: window.Whisper.Message,
-  });
+  const message = await window.Signal.Data.getMessageById(messageId);
   if (!message) {
     log.warn(
-      `maybeAddSenderKeyDistributionMessage/${logId}: Unable to find message ${messageId}`
+      `getRetryConversation/${logId}: Unable to find message ${messageId}`
     );
     // Fail over to requested groupId
     return window.ConversationController.get(requestGroupId);
   }
 
-  const conversationId = message.get('conversationId');
+  const { conversationId } = message;
   return window.ConversationController.get(conversationId);
 }
 
@@ -315,13 +379,18 @@ async function maybeAddSenderKeyDistributionMessage({
   messageIds,
   requestGroupId,
   requesterUuid,
+  timestamp,
 }: {
   contentProto: Proto.IContent;
   logId: string;
   messageIds: Array<string>;
   requestGroupId?: string;
   requesterUuid: string;
-}): Promise<{ contentProto: Proto.IContent; groupId?: string }> {
+  timestamp: number;
+}): Promise<{
+  contentProto: Proto.IContent;
+  groupId?: string;
+}> {
   const conversation = await getRetryConversation({
     logId,
     messageIds,
@@ -351,14 +420,17 @@ async function maybeAddSenderKeyDistributionMessage({
 
   const senderKeyInfo = conversation.get('senderKeyInfo');
   if (senderKeyInfo && senderKeyInfo.distributionId) {
-    const senderKeyDistributionMessage = await window.textsecure.messaging.getSenderKeyDistributionMessage(
-      senderKeyInfo.distributionId
-    );
+    const protoWithDistributionMessage =
+      await window.textsecure.messaging.getSenderKeyDistributionMessage(
+        senderKeyInfo.distributionId,
+        { throwIfNotInDatabase: true, timestamp }
+      );
 
     return {
       contentProto: {
         ...contentProto,
-        senderKeyDistributionMessage: senderKeyDistributionMessage.serialize(),
+        senderKeyDistributionMessage:
+          protoWithDistributionMessage.senderKeyDistributionMessage,
       },
       groupId: conversation.get('groupId'),
     };

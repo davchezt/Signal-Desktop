@@ -1,13 +1,15 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import React, { ReactChild } from 'react';
+import type { ReactChild } from 'react';
+import React from 'react';
 
 import { LeftPaneHelper } from './LeftPaneHelper';
-import { Row, RowType } from '../ConversationList';
-import { PropsDataType as ContactListItemPropsType } from '../conversationList/ContactListItem';
+import type { Row } from '../ConversationList';
+import { RowType } from '../ConversationList';
+import type { ContactListItemConversationType } from '../conversationList/ContactListItem';
 import { DisappearingTimerSelect } from '../DisappearingTimerSelect';
-import { LocalizerType } from '../../types/Util';
+import type { LocalizerType } from '../../types/Util';
 import { Alert } from '../Alert';
 import { AvatarEditor } from '../AvatarEditor';
 import { AvatarPreview } from '../AvatarPreview';
@@ -15,7 +17,7 @@ import { Spinner } from '../Spinner';
 import { Button } from '../Button';
 import { Modal } from '../Modal';
 import { GroupTitleInput } from '../GroupTitleInput';
-import {
+import type {
   AvatarDataType,
   DeleteAvatarFromDiskActionType,
   ReplaceAvatarActionType,
@@ -30,11 +32,9 @@ export type LeftPaneSetGroupMetadataPropsType = {
   hasError: boolean;
   isCreating: boolean;
   isEditingAvatar: boolean;
-  selectedContacts: ReadonlyArray<ContactListItemPropsType>;
+  selectedContacts: ReadonlyArray<ContactListItemConversationType>;
   userAvatarData: ReadonlyArray<AvatarDataType>;
 };
-
-/* eslint-disable class-methods-use-this */
 
 export class LeftPaneSetGroupMetadataHelper extends LeftPaneHelper<LeftPaneSetGroupMetadataPropsType> {
   private readonly groupAvatar: undefined | Uint8Array;
@@ -49,7 +49,7 @@ export class LeftPaneSetGroupMetadataHelper extends LeftPaneHelper<LeftPaneSetGr
 
   private readonly isEditingAvatar: boolean;
 
-  private readonly selectedContacts: ReadonlyArray<ContactListItemPropsType>;
+  private readonly selectedContacts: ReadonlyArray<ContactListItemConversationType>;
 
   private readonly userAvatarData: ReadonlyArray<AvatarDataType>;
 
@@ -75,7 +75,7 @@ export class LeftPaneSetGroupMetadataHelper extends LeftPaneHelper<LeftPaneSetGr
     this.userAvatarData = userAvatarData;
   }
 
-  getHeaderContents({
+  override getHeaderContents({
     i18n,
     showChooseGroupMembers,
   }: Readonly<{
@@ -101,7 +101,7 @@ export class LeftPaneSetGroupMetadataHelper extends LeftPaneHelper<LeftPaneSetGr
     );
   }
 
-  getBackAction({
+  override getBackAction({
     showChooseGroupMembers,
   }: {
     showChooseGroupMembers: () => void;
@@ -109,7 +109,7 @@ export class LeftPaneSetGroupMetadataHelper extends LeftPaneHelper<LeftPaneSetGr
     return this.isCreating ? undefined : showChooseGroupMembers;
   }
 
-  getPreRowsNode({
+  override getPreRowsNode({
     clearGroupCreationError,
     composeDeleteAvatarFromDisk,
     composeReplaceAvatar,
@@ -219,7 +219,7 @@ export class LeftPaneSetGroupMetadataHelper extends LeftPaneHelper<LeftPaneSetGr
     );
   }
 
-  getFooterContents({
+  override getFooterContents({
     createGroup,
     i18n,
   }: Readonly<{
@@ -227,7 +227,12 @@ export class LeftPaneSetGroupMetadataHelper extends LeftPaneHelper<LeftPaneSetGr
     i18n: LocalizerType;
   }>): ReactChild {
     return (
-      <Button disabled={!this.canCreateGroup()} onClick={createGroup}>
+      <Button
+        disabled={!this.canCreateGroup()}
+        onClick={() => {
+          createGroup();
+        }}
+      >
         {this.isCreating ? (
           <Spinner size="20px" svgSize="small" direction="on-avatar" />
         ) : (

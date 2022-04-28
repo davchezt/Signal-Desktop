@@ -1,18 +1,19 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { createSelector } from 'reselect';
 
-import { StateType } from '../reducer';
-import {
+import type { StateType } from '../reducer';
+import type {
   CallingStateType,
   CallsByConversationType,
   DirectCallStateType,
   GroupCallStateType,
-  getIncomingCall as getIncomingCallHelper,
 } from '../ducks/calling';
+import { getIncomingCall as getIncomingCallHelper } from '../ducks/calling';
 import { getUserUuid } from './user';
 import { getOwn } from '../../util/getOwn';
+import type { UUIDStringType } from '../../types/UUID';
 
 export type CallStateType = DirectCallStateType | GroupCallStateType;
 
@@ -34,9 +35,9 @@ export type CallSelectorType = (
 ) => CallStateType | undefined;
 export const getCallSelector = createSelector(
   getCallsByConversation,
-  (callsByConversation: CallsByConversationType): CallSelectorType => (
-    conversationId: string
-  ) => getOwn(callsByConversation, conversationId)
+  (callsByConversation: CallsByConversationType): CallSelectorType =>
+    (conversationId: string) =>
+      getOwn(callsByConversation, conversationId)
 );
 
 export const getActiveCall = createSelector(
@@ -61,7 +62,12 @@ export const getIncomingCall = createSelector(
   getUserUuid,
   (
     callsByConversation: CallsByConversationType,
-    ourUuid: string
-  ): undefined | DirectCallStateType | GroupCallStateType =>
-    getIncomingCallHelper(callsByConversation, ourUuid)
+    ourUuid: UUIDStringType | undefined
+  ): undefined | DirectCallStateType | GroupCallStateType => {
+    if (!ourUuid) {
+      return undefined;
+    }
+
+    return getIncomingCallHelper(callsByConversation, ourUuid);
+  }
 );

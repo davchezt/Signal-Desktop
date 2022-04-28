@@ -1,15 +1,15 @@
-// Copyright 2020 Signal Messenger, LLC
+// Copyright 2020-2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { connect } from 'react-redux';
 import { mapDispatchToProps } from '../actions';
-import {
-  ContactModal,
-  PropsDataType,
-} from '../../components/conversation/ContactModal';
-import { StateType } from '../reducer';
+import type { PropsDataType } from '../../components/conversation/ContactModal';
+import { ContactModal } from '../../components/conversation/ContactModal';
+import type { StateType } from '../reducer';
 
-import { getIntl } from '../selectors/user';
+import { getAreWeASubscriber } from '../selectors/items';
+import { getIntl, getTheme } from '../selectors/user';
+import { getBadgesSelector } from '../selectors/badges';
 import { getConversationSelector } from '../selectors/conversations';
 
 const mapStateToProps = (state: StateType): PropsDataType => {
@@ -28,7 +28,7 @@ const mapStateToProps = (state: StateType): PropsDataType => {
   let isAdmin = false;
   if (contact && currentConversation && currentConversation.memberships) {
     currentConversation.memberships.forEach(membership => {
-      if (membership.conversationId === contact.id) {
+      if (membership.uuid === contact.uuid) {
         isMember = true;
         isAdmin = membership.isAdmin;
       }
@@ -36,12 +36,15 @@ const mapStateToProps = (state: StateType): PropsDataType => {
   }
 
   return {
+    areWeASubscriber: getAreWeASubscriber(state),
     areWeAdmin,
+    badges: getBadgesSelector(state)(contact.badges),
     contact,
-    conversationId,
+    conversation: currentConversation,
     i18n: getIntl(state),
     isAdmin,
     isMember,
+    theme: getTheme(state),
   };
 };
 

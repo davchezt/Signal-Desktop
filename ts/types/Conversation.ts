@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { computeHash } from '../Crypto';
-import { ConversationAttributesType } from '../model-types.d';
+import type { ConversationAttributesType } from '../model-types.d';
 
 export type BuildAvatarUpdaterOptions = Readonly<{
   deleteAttachmentData: (path: string) => Promise<void>;
@@ -41,7 +41,7 @@ function buildAvatarUpdater({ field }: { field: 'avatar' | 'profileAvatar' }) {
     const { hash, path } = avatar;
     const exists = await doesAttachmentExist(path);
     if (!exists) {
-      window.SignalWindow.log.warn(
+      window.SignalContext.log.warn(
         `Conversation.buildAvatarUpdater: attachment ${path} did not exist`
       );
     }

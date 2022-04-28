@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { generateSecurityNumberBlock } from '../../util/safetyNumber';
-import { ConversationType } from './conversations';
+import type { ConversationType } from './conversations';
 import {
   reloadProfiles,
   toggleVerification,
@@ -157,7 +157,7 @@ export const actions = {
   toggleVerified,
 };
 
-function getEmptyState(): SafetyNumberStateType {
+export function getEmptyState(): SafetyNumberStateType {
   return {
     contacts: {},
   };

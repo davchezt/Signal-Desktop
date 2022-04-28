@@ -1,4 +1,4 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 /* eslint-disable no-param-reassign */
@@ -8,18 +8,14 @@
 /* eslint-disable no-nested-ternary */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import fetch, { Response } from 'node-fetch';
+import AbortController from 'abort-controller';
+import type { Response } from 'node-fetch';
+import fetch from 'node-fetch';
 import ProxyAgent from 'proxy-agent';
 import { Agent } from 'https';
 import pProps from 'p-props';
-import {
-  compact,
-  Dictionary,
-  escapeRegExp,
-  isNumber,
-  mapValues,
-  zipObject,
-} from 'lodash';
+import type { Dictionary } from 'lodash';
+import { compact, escapeRegExp, isNumber, mapValues, zipObject } from 'lodash';
 import { createVerify } from 'crypto';
 import { pki } from 'node-forge';
 import is from '@sindresorhus/is';
@@ -27,14 +23,23 @@ import PQueue from 'p-queue';
 import { v4 as getGuid } from 'uuid';
 import { z } from 'zod';
 import Long from 'long';
+import type { Readable } from 'stream';
 
-import { assert } from '../util/assert';
+import { assert, strictAssert } from '../util/assert';
+import { isRecord } from '../util/isRecord';
 import * as durations from '../util/durations';
+import type { ExplodePromiseResultType } from '../util/explodePromise';
+import { explodePromise } from '../util/explodePromise';
 import { getUserAgent } from '../util/getUserAgent';
+import { getStreamWithTimeout } from '../util/getStreamWithTimeout';
+import { formatAcceptLanguageHeader } from '../util/userLanguages';
 import { toWebSafeBase64 } from '../util/webSafeBase64';
-import { SocketStatus } from '../types/SocketStatus';
+import { getBasicAuth } from '../util/getBasicAuth';
+import type { SocketStatus } from '../types/SocketStatus';
 import { toLogFormat } from '../types/errors';
 import { isPackIdValid, redactPackId } from '../types/Stickers';
+import type { UUID, UUIDStringType } from '../types/UUID';
+import { isValidUuid, UUIDKind } from '../types/UUID';
 import * as Bytes from '../Bytes';
 import {
   constantTimeEqual,
@@ -46,20 +51,24 @@ import {
 } from '../Crypto';
 import { calculateAgreement, generateKeyPair } from '../Curve';
 import * as linkPreviewFetch from '../linkPreviews/linkPreviewFetch';
+import { isBadgeImageFileUrlValid } from '../badges/isBadgeImageFileUrlValid';
 
-import {
+import type {
   StorageServiceCallOptionsType,
   StorageServiceCredentials,
 } from '../textsecure.d';
 import { SocketManager } from './SocketManager';
-import WebSocketResource from './WebsocketResources';
+import type { CDSResponseType } from './CDSSocketManager';
+import { CDSSocketManager } from './CDSSocketManager';
+import type WebSocketResource from './WebsocketResources';
 import { SignalService as Proto } from '../protobuf';
 
 import { HTTPError } from './Errors';
-import MessageSender from './SendMessage';
-import { WebAPICredentials, IRequestHandler } from './Types.d';
+import type MessageSender from './SendMessage';
+import type { WebAPICredentials, IRequestHandler } from './Types.d';
 import { handleStatusCode, translateError } from './Utils';
 import * as log from '../logging/log';
+import { maybeParseUrl } from '../util/url';
 
 // Note: this will break some code that expects to be able to use err.response when a
 //   web request fails, because it will force it to text. But it is very useful for
@@ -140,11 +149,12 @@ function _validateResponse(response: any, schema: any) {
 }
 
 const FIVE_MINUTES = 5 * durations.MINUTE;
+const GET_ATTACHMENT_CHUNK_TIMEOUT = 10 * durations.SECOND;
 
 type AgentCacheType = {
   [name: string]: {
     timestamp: number;
-    agent: ProxyAgent | Agent;
+    agent: ReturnType<typeof ProxyAgent> | Agent;
   };
 };
 const agents: AgentCacheType = {};
@@ -159,13 +169,12 @@ function getContentType(response: Response) {
 
 type FetchHeaderListType = { [name: string]: string };
 export type HeaderListType = { [name: string]: string | ReadonlyArray<string> };
-type HTTPCodeType = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+type HTTPCodeType = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD';
 
 type RedactUrl = (url: string) => string;
 
 type PromiseAjaxOptionsType = {
   socketManager?: SocketManager;
-  accessKey?: string;
   basicAuth?: string;
   certificateAuthority?: string;
   contentType?: string;
@@ -177,16 +186,30 @@ type PromiseAjaxOptionsType = {
   proxyUrl?: string;
   redactUrl?: RedactUrl;
   redirect?: 'error' | 'follow' | 'manual';
-  responseType?: 'json' | 'jsonwithdetails' | 'bytes' | 'byteswithdetails';
+  responseType?:
+    | 'json'
+    | 'jsonwithdetails'
+    | 'bytes'
+    | 'byteswithdetails'
+    | 'stream';
   serverUrl?: string;
   stack?: string;
   timeout?: number;
   type: HTTPCodeType;
-  unauthenticated?: boolean;
   user?: string;
   validateResponse?: any;
   version: string;
-};
+  abortSignal?: AbortSignal;
+} & (
+  | {
+      unauthenticated?: false;
+      accessKey?: string;
+    }
+  | {
+      unauthenticated: true;
+      accessKey: undefined | string;
+    }
+);
 
 type JSONWithDetailsType = {
   data: unknown;
@@ -295,6 +318,7 @@ async function _promiseAjax(
     agent,
     ca: options.certificateAuthority,
     timeout,
+    abortSignal: options.abortSignal,
   };
 
   if (fetchOptions.body instanceof Uint8Array) {
@@ -310,18 +334,15 @@ async function _promiseAjax(
   if (basicAuth) {
     fetchOptions.headers.Authorization = `Basic ${basicAuth}`;
   } else if (unauthenticated) {
-    if (!accessKey) {
-      throw new Error(
-        '_promiseAjax: mode is unauthenticated, but accessKey was not provided'
-      );
+    if (accessKey) {
+      // Access key is already a Base64 string
+      fetchOptions.headers['Unidentified-Access-Key'] = accessKey;
     }
-    // Access key is already a Base64 string
-    fetchOptions.headers['Unidentified-Access-Key'] = accessKey;
   } else if (options.user && options.password) {
-    const auth = Bytes.toBase64(
-      Bytes.fromString(`${options.user}:${options.password}`)
-    );
-    fetchOptions.headers.Authorization = `Basic ${auth}`;
+    fetchOptions.headers.Authorization = getBasicAuth({
+      username: options.user,
+      password: options.password,
+    });
   }
 
   if (options.contentType) {
@@ -329,7 +350,7 @@ async function _promiseAjax(
   }
 
   let response: Response;
-  let result: string | Uint8Array | unknown;
+  let result: string | Uint8Array | Readable | unknown;
   try {
     response = socketManager
       ? await socketManager.fetch(url, fetchOptions)
@@ -362,6 +383,8 @@ async function _promiseAjax(
       options.responseType === 'byteswithdetails'
     ) {
       result = await response.buffer();
+    } else if (options.responseType === 'stream') {
+      result = response.body;
     } else {
       result = await response.textConverted();
     }
@@ -468,6 +491,10 @@ function _outerAjax(
 ): Promise<BytesWithDetailsType>;
 function _outerAjax(
   providedUrl: string | null,
+  options: PromiseAjaxOptionsType & { responseType?: 'stream' }
+): Promise<Readable>;
+function _outerAjax(
+  providedUrl: string | null,
   options: PromiseAjaxOptionsType
 ): Promise<unknown>;
 
@@ -497,18 +524,22 @@ function makeHTTPError(
 
 const URL_CALLS = {
   accounts: 'v1/accounts',
+  accountExistence: 'v1/accounts/account',
   attachmentId: 'v2/attachments/form/upload',
   attestation: 'v1/attestation',
+  challenge: 'v1/challenge',
   config: 'v1/config',
   deliveryCert: 'v1/certificate/delivery',
   devices: 'v1/devices',
   directoryAuth: 'v1/directory/auth',
+  directoryAuthV2: 'v2/directory/auth',
   discovery: 'v1/discovery',
   getGroupAvatarUpload: 'v1/groups/avatar/form',
   getGroupCredentials: 'v1/certificate/group',
   getIceServers: 'v1/accounts/turn',
   getStickerPackUpload: 'v1/sticker/pack/form',
   groupLog: 'v1/groups/logs',
+  groupJoinedAtVersion: 'v1/groups/joined_at_version',
   groups: 'v1/groups',
   groupsViaLink: 'v1/groups/join',
   groupToken: 'v1/groups/token',
@@ -523,10 +554,11 @@ const URL_CALLS = {
   storageModify: 'v1/storage/',
   storageRead: 'v1/storage/read',
   storageToken: 'v1/storage/auth',
+  subscriptions: 'v1/subscription',
   supportUnauthenticatedDelivery: 'v1/devices/unauthenticated_delivery',
   updateDeviceName: 'v1/accounts/name',
+  username: 'v1/accounts/username',
   whoami: 'v1/accounts/whoami',
-  challenge: 'v1/challenge',
 };
 
 const WEBSOCKET_CALLS = new Set<keyof typeof URL_CALLS>([
@@ -555,6 +587,7 @@ const WEBSOCKET_CALLS = new Set<keyof typeof URL_CALLS>([
 
   // Directory
   'directoryAuth',
+  'directoryAuthV2',
 
   // Storage
   'storageToken',
@@ -563,9 +596,14 @@ const WEBSOCKET_CALLS = new Set<keyof typeof URL_CALLS>([
 type InitializeOptionsType = {
   url: string;
   storageUrl: string;
-  directoryEnclaveId: string;
-  directoryTrustAnchor: string;
-  directoryUrl: string;
+  updatesUrl: string;
+  directoryVersion: number;
+  directoryUrl?: string;
+  directoryEnclaveId?: string;
+  directoryTrustAnchor?: string;
+  directoryV2Url: string;
+  directoryV2PublicKey: string;
+  directoryV2CodeHashes: ReadonlyArray<string>;
   cdnUrlObject: {
     readonly '0': string;
     readonly [propName: string]: string;
@@ -584,7 +622,6 @@ export type MessageType = Readonly<{
 }>;
 
 type AjaxOptionsType = {
-  accessKey?: string;
   basicAuth?: string;
   call: keyof typeof URL_CALLS;
   contentType?: string;
@@ -595,14 +632,23 @@ type AjaxOptionsType = {
   jsonData?: unknown;
   password?: string;
   redactUrl?: RedactUrl;
-  responseType?: 'json' | 'bytes' | 'byteswithdetails';
+  responseType?: 'json' | 'bytes' | 'byteswithdetails' | 'stream';
   schema?: unknown;
   timeout?: number;
-  unauthenticated?: boolean;
   urlParameters?: string;
   username?: string;
   validateResponse?: any;
-};
+  isRegistration?: true;
+} & (
+  | {
+      unauthenticated?: false;
+      accessKey?: string;
+    }
+  | {
+      unauthenticated: true;
+      accessKey: undefined | string;
+    }
+);
 
 export type WebAPIConnectOptionsType = WebAPICredentials & {
   useWebSocket?: boolean;
@@ -614,10 +660,10 @@ export type WebAPIConnectType = {
 
 export type CapabilitiesType = {
   announcementGroup: boolean;
-  gv2: boolean;
   'gv1-migration': boolean;
   senderKey: boolean;
   changeNumber: boolean;
+  stories: boolean;
 };
 export type CapabilitiesUploadType = {
   announcementGroup: true;
@@ -625,6 +671,7 @@ export type CapabilitiesUploadType = {
   'gv1-migration': true;
   senderKey: true;
   changeNumber: true;
+  stories: true;
 };
 
 type StickerPackManifestType = Uint8Array;
@@ -637,6 +684,12 @@ export type GroupCredentialsType = {
   groupPublicParamsHex: string;
   authCredentialPresentationHex: string;
 };
+export type GetGroupLogOptionsType = Readonly<{
+  startVersion: number | undefined;
+  includeFirstState: boolean;
+  includeLastState: boolean;
+  maxSupportedChangeEpoch: number;
+}>;
 export type GroupLogResponseType = {
   currentRevision?: number;
   start?: number;
@@ -648,6 +701,7 @@ export type ProfileRequestDataType = {
   about: string | null;
   aboutEmoji: string | null;
   avatar: boolean;
+  sameAvatar: boolean;
   commitment: string;
   name: string;
   paymentAddress: string | null;
@@ -675,10 +729,11 @@ export type ProfileType = Readonly<{
   avatar?: string;
   unidentifiedAccess?: string;
   unrestrictedUnidentifiedAccess?: string;
-  username?: string;
   uuid?: string;
   credential?: string;
-  capabilities?: unknown;
+  capabilities?: CapabilitiesType;
+  paymentAddress?: string;
+  badges?: unknown;
 }>;
 
 export type GetIceServersResultType = Readonly<{
@@ -706,26 +761,70 @@ export type MakeProxiedRequestResultType =
     };
 
 export type WhoamiResultType = Readonly<{
-  uuid?: string;
+  uuid?: UUIDStringType;
+  pni?: UUIDStringType;
   number?: string;
+  username?: string;
 }>;
 
+export type ConfirmCodeResultType = Readonly<{
+  uuid: UUIDStringType;
+  pni: UUIDStringType;
+  deviceId?: number;
+}>;
+
+export type GetUuidsForE164sV2OptionsType = Readonly<{
+  e164s: ReadonlyArray<string>;
+  acis: ReadonlyArray<UUIDStringType>;
+  accessKeys: ReadonlyArray<string>;
+}>;
+
+type GetProfileCommonOptionsType = Readonly<
+  {
+    userLanguages: ReadonlyArray<string>;
+    credentialType?: 'pni' | 'profileKey';
+  } & (
+    | {
+        profileKeyVersion?: undefined;
+        profileKeyCredentialRequest?: undefined;
+      }
+    | {
+        profileKeyVersion: string;
+        profileKeyCredentialRequest?: string;
+      }
+  )
+>;
+
+export type GetProfileOptionsType = GetProfileCommonOptionsType &
+  Readonly<{
+    accessKey?: undefined;
+  }>;
+
+export type GetProfileUnauthOptionsType = GetProfileCommonOptionsType &
+  Readonly<{
+    accessKey: string;
+  }>;
+
 export type WebAPIType = {
+  startRegistration(): unknown;
+  finishRegistration(baton: unknown): void;
   confirmCode: (
     number: string,
     code: string,
     newPassword: string,
     registrationId: number,
     deviceName?: string | null,
-    options?: { accessKey?: Uint8Array; uuid?: string }
-  ) => Promise<{ uuid?: string; deviceId?: number }>;
+    options?: { accessKey?: Uint8Array }
+  ) => Promise<ConfirmCodeResultType>;
   createGroup: (
     group: Proto.IGroup,
     options: GroupCredentialsType
   ) => Promise<void>;
+  deleteUsername: () => Promise<void>;
   getAttachment: (cdnKey: string, cdnNumber?: number) => Promise<Uint8Array>;
   getAvatar: (path: string) => Promise<Uint8Array>;
   getDevices: () => Promise<GetDevicesResultType>;
+  getHasSubscription: (subscriberId: Uint8Array) => Promise<boolean>;
   getGroup: (options: GroupCredentialsType) => Promise<Proto.Group>;
   getGroupFromLink: (
     inviteLinkPassword: string,
@@ -734,14 +833,15 @@ export type WebAPIType = {
   getGroupAvatar: (key: string) => Promise<Uint8Array>;
   getGroupCredentials: (
     startDay: number,
-    endDay: number
+    endDay: number,
+    uuidKind: UUIDKind
   ) => Promise<Array<GroupCredentialType>>;
   getGroupExternalCredential: (
     options: GroupCredentialsType
   ) => Promise<Proto.GroupExternalCredential>;
   getGroupLog: (
-    startVersion: number,
-    options: GroupCredentialsType
+    options: GetGroupLogOptionsType,
+    credentials: GroupCredentialsType
   ) => Promise<GroupLogResponseType>;
   getIceServers: () => Promise<GetIceServersResultType>;
   getKeysForIdentifier: (
@@ -753,22 +853,17 @@ export type WebAPIType = {
     deviceId?: number,
     options?: { accessKey?: string }
   ) => Promise<ServerKeysType>;
-  getMyKeys: () => Promise<number>;
+  getMyKeys: (uuidKind: UUIDKind) => Promise<number>;
   getProfile: (
     identifier: string,
-    options?: {
-      profileKeyVersion?: string;
-      profileKeyCredentialRequest?: string;
-    }
+    options: GetProfileOptionsType
   ) => Promise<ProfileType>;
+  getProfileForUsername: (username: string) => Promise<ProfileType>;
   getProfileUnauth: (
     identifier: string,
-    options: {
-      accessKey: string;
-      profileKeyVersion?: string;
-      profileKeyCredentialRequest?: string;
-    }
+    options: GetProfileUnauthOptionsType
   ) => Promise<ProfileType>;
+  getBadgeImageFile: (imageUrl: string) => Promise<Uint8Array>;
   getProvisioningResource: (
     handler: IRequestHandler
   ) => Promise<WebSocketResource>;
@@ -782,7 +877,10 @@ export type WebAPIType = {
   getStorageRecords: MessageSender['getStorageRecords'];
   getUuidsForE164s: (
     e164s: ReadonlyArray<string>
-  ) => Promise<Dictionary<string | null>>;
+  ) => Promise<Dictionary<UUIDStringType | null>>;
+  getUuidsForE164sV2: (
+    options: GetUuidsForE164sV2OptionsType
+  ) => Promise<CDSResponseType>;
   fetchLinkPreviewMetadata: (
     href: string,
     abortSignal: AbortSignal
@@ -811,17 +909,19 @@ export type WebAPIType = {
   putProfile: (
     jsonData: ProfileRequestDataType
   ) => Promise<UploadAvatarHeadersType | undefined>;
-  registerCapabilities: (capabilities: CapabilitiesUploadType) => Promise<void>;
   putStickers: (
     encryptedManifest: Uint8Array,
     encryptedStickers: Array<Uint8Array>,
     onProgress?: () => void
   ) => Promise<string>;
-  registerKeys: (genKeys: KeysType) => Promise<void>;
+  putUsername: (newUsername: string) => Promise<void>;
+  registerCapabilities: (capabilities: CapabilitiesUploadType) => Promise<void>;
+  registerKeys: (genKeys: KeysType, uuidKind: UUIDKind) => Promise<void>;
   registerSupportForUnauthenticatedDelivery: () => Promise<void>;
-  reportMessage: (senderE164: string, serverGuid: string) => Promise<void>;
-  requestVerificationSMS: (number: string) => Promise<void>;
-  requestVerificationVoice: (number: string) => Promise<void>;
+  reportMessage: (senderUuid: string, serverGuid: string) => Promise<void>;
+  requestVerificationSMS: (number: string, token: string) => Promise<void>;
+  requestVerificationVoice: (number: string, token: string) => Promise<void>;
+  checkAccountExistence: (uuid: UUID) => Promise<boolean>;
   sendMessages: (
     destination: string,
     messageArray: ReadonlyArray<MessageType>,
@@ -841,7 +941,10 @@ export type WebAPIType = {
     timestamp: number,
     online?: boolean
   ) => Promise<MultiRecipient200ResponseType>;
-  setSignedPreKey: (signedPreKey: SignedPreKeyType) => Promise<void>;
+  setSignedPreKey: (
+    signedPreKey: SignedPreKeyType,
+    uuidKind: UUIDKind
+  ) => Promise<void>;
   updateDeviceName: (deviceName: string) => Promise<void>;
   uploadAvatar: (
     uploadAvatarRequestHeaders: UploadAvatarHeadersType,
@@ -914,9 +1017,14 @@ export type ProxiedRequestOptionsType = {
 export function initialize({
   url,
   storageUrl,
+  updatesUrl,
+  directoryVersion,
+  directoryUrl,
   directoryEnclaveId,
   directoryTrustAnchor,
-  directoryUrl,
+  directoryV2Url,
+  directoryV2PublicKey,
+  directoryV2CodeHashes,
   cdnUrlObject,
   certificateAuthority,
   contentProxyUrl,
@@ -929,14 +1037,38 @@ export function initialize({
   if (!is.string(storageUrl)) {
     throw new Error('WebAPI.initialize: Invalid storageUrl');
   }
-  if (!is.string(directoryEnclaveId)) {
-    throw new Error('WebAPI.initialize: Invalid directory enclave id');
+  if (!is.string(updatesUrl)) {
+    throw new Error('WebAPI.initialize: Invalid updatesUrl');
   }
-  if (!is.string(directoryTrustAnchor)) {
-    throw new Error('WebAPI.initialize: Invalid directory enclave id');
+  if (directoryVersion === 1) {
+    if (!is.string(directoryEnclaveId)) {
+      throw new Error('WebAPI.initialize: Invalid directory enclave id');
+    }
+    if (!is.string(directoryTrustAnchor)) {
+      throw new Error('WebAPI.initialize: Invalid directory trust anchor');
+    }
+    if (!is.string(directoryUrl)) {
+      throw new Error('WebAPI.initialize: Invalid directory url');
+    }
+  } else {
+    if (directoryEnclaveId) {
+      throw new Error('WebAPI.initialize: Invalid directory enclave id');
+    }
+    if (directoryTrustAnchor) {
+      throw new Error('WebAPI.initialize: Invalid directory trust anchor');
+    }
+    if (directoryUrl) {
+      throw new Error('WebAPI.initialize: Invalid directory url');
+    }
   }
-  if (!is.string(directoryUrl)) {
-    throw new Error('WebAPI.initialize: Invalid directory url');
+  if (!is.string(directoryV2Url)) {
+    throw new Error('WebAPI.initialize: Invalid directory V2 url');
+  }
+  if (!is.string(directoryV2PublicKey)) {
+    throw new Error('WebAPI.initialize: Invalid directory V2 public key');
+  }
+  if (!is.array(directoryV2CodeHashes)) {
+    throw new Error('WebAPI.initialize: Invalid directory V2 code hash');
   }
   if (!is.object(cdnUrlObject)) {
     throw new Error('WebAPI.initialize: Invalid cdnUrlObject');
@@ -977,7 +1109,10 @@ export function initialize({
     let username = initialUsername;
     let password = initialPassword;
     const PARSE_RANGE_HEADER = /\/(\d+)$/;
-    const PARSE_GROUP_LOG_RANGE_HEADER = /$versions (\d{1,10})-(\d{1,10})\/(d{1,10})/;
+    const PARSE_GROUP_LOG_RANGE_HEADER =
+      /^versions\s+(\d{1,10})-(\d{1,10})\/(\d{1,10})/;
+
+    let activeRegistration: ExplodePromiseResultType<void> | undefined;
 
     const socketManager = new SocketManager({
       url,
@@ -998,6 +1133,23 @@ export function initialize({
       socketManager.authenticate({ username, password });
     }
 
+    const cdsSocketManager = new CDSSocketManager({
+      url: directoryV2Url,
+      publicKey: directoryV2PublicKey,
+      codeHashes: directoryV2CodeHashes,
+      certificateAuthority,
+      version,
+      proxyUrl,
+    });
+
+    let fetchForLinkPreviews: linkPreviewFetch.FetchFn;
+    if (proxyUrl) {
+      const agent = new ProxyAgent(proxyUrl);
+      fetchForLinkPreviews = (href, init) => fetch(href, { ...init, agent });
+    } else {
+      fetchForLinkPreviews = fetch;
+    }
+
     // Thanks, function hoisting!
     return {
       getSocketStatus,
@@ -1008,8 +1160,11 @@ export function initialize({
       unregisterRequestHandler,
       authenticate,
       logout,
+      checkAccountExistence,
       confirmCode,
       createGroup,
+      deleteUsername,
+      finishRegistration,
       fetchLinkPreviewImage,
       fetchLinkPreviewMetadata,
       getAttachment,
@@ -1022,12 +1177,15 @@ export function initialize({
       getGroupExternalCredential,
       getGroupFromLink,
       getGroupLog,
+      getHasSubscription,
       getIceServers,
       getKeysForIdentifier,
       getKeysForIdentifierUnauth,
       getMyKeys,
       getProfile,
+      getProfileForUsername,
       getProfileUnauth,
+      getBadgeImageFile,
       getProvisioningResource,
       getSenderCertificate,
       getSticker,
@@ -1036,6 +1194,7 @@ export function initialize({
       getStorageManifest,
       getStorageRecords,
       getUuidsForE164s,
+      getUuidsForE164sV2,
       makeProxiedRequest,
       makeSfuRequest,
       modifyGroup,
@@ -1043,6 +1202,7 @@ export function initialize({
       putAttachment,
       putProfile,
       putStickers,
+      putUsername,
       registerCapabilities,
       registerKeys,
       registerSupportForUnauthenticatedDelivery,
@@ -1053,6 +1213,7 @@ export function initialize({
       sendMessagesUnauth,
       sendWithSenderKey,
       setSignedPreKey,
+      startRegistration,
       updateDeviceName,
       uploadAvatar,
       uploadGroupAvatar,
@@ -1067,10 +1228,25 @@ export function initialize({
       param: AjaxOptionsType & { responseType: 'byteswithdetails' }
     ): Promise<BytesWithDetailsType>;
     function _ajax(
+      param: AjaxOptionsType & { responseType: 'stream' }
+    ): Promise<Readable>;
+    function _ajax(
       param: AjaxOptionsType & { responseType: 'json' }
     ): Promise<unknown>;
 
     async function _ajax(param: AjaxOptionsType): Promise<unknown> {
+      if (
+        !param.unauthenticated &&
+        activeRegistration &&
+        !param.isRegistration
+      ) {
+        log.info('WebAPI: request blocked by active registration');
+        const start = Date.now();
+        await activeRegistration.promise;
+        const duration = Date.now() - start;
+        log.info(`WebAPI: request unblocked after ${duration}ms`);
+      }
+
       if (!param.urlParameters) {
         param.urlParameters = '';
       }
@@ -1088,13 +1264,13 @@ export function initialize({
           (param.jsonData ? JSON.stringify(param.jsonData) : undefined),
         headers: param.headers,
         host: param.host || url,
-        password: param.password || password,
+        password: param.password ?? password,
         path: URL_CALLS[param.call] + param.urlParameters,
         proxyUrl,
         responseType: param.responseType,
         timeout: param.timeout,
         type: param.httpType,
-        user: param.username || username,
+        user: param.username ?? username,
         redactUrl: param.redactUrl,
         serverUrl: url,
         validateResponse: param.validateResponse,
@@ -1117,12 +1293,37 @@ export function initialize({
       }
     }
 
-    async function whoami() {
-      return (await _ajax({
+    function uuidKindToQuery(kind: UUIDKind): string {
+      let value: string;
+      if (kind === UUIDKind.ACI) {
+        value = 'aci';
+      } else if (kind === UUIDKind.PNI) {
+        value = 'pni';
+      } else {
+        throw new Error(`Unsupported UUIDKind: ${kind}`);
+      }
+      return `identity=${value}`;
+    }
+
+    async function whoami(): Promise<WhoamiResultType> {
+      const response = await _ajax({
         call: 'whoami',
         httpType: 'GET',
         responseType: 'json',
-      })) as WhoamiResultType;
+      });
+
+      if (!isRecord(response)) {
+        return {};
+      }
+
+      return {
+        uuid: isValidUuid(response.uuid) ? response.uuid : undefined,
+        pni: isValidUuid(response.pni) ? response.pni : undefined,
+        number:
+          typeof response.number === 'string' ? response.number : undefined,
+        username:
+          typeof response.username === 'string' ? response.username : undefined,
+      };
     }
 
     async function sendChallengeResponse(challengeResponse: ChallengeType) {
@@ -1219,17 +1420,29 @@ export function initialize({
     ): Promise<Uint8Array> {
       const { credentials, greaterThanVersion } = options;
 
-      return _ajax({
+      const { data, response } = await _ajax({
         call: 'storageManifest',
         contentType: 'application/x-protobuf',
         host: storageUrl,
         httpType: 'GET',
-        responseType: 'bytes',
+        responseType: 'byteswithdetails',
         urlParameters: greaterThanVersion
           ? `/version/${greaterThanVersion}`
           : '',
         ...credentials,
       });
+
+      if (response.status === 204) {
+        throw makeHTTPError(
+          'promiseAjax: error response',
+          response.status,
+          response.headers.raw(),
+          data,
+          new Error().stack
+        );
+      }
+
+      return data;
     }
 
     async function getStorageRecords(
@@ -1286,16 +1499,25 @@ export function initialize({
 
     function getProfileUrl(
       identifier: string,
-      profileKeyVersion?: string,
-      profileKeyCredentialRequest?: string
+      {
+        profileKeyVersion,
+        profileKeyCredentialRequest,
+        credentialType = 'profileKey',
+      }: GetProfileCommonOptionsType
     ) {
       let profileUrl = `/${identifier}`;
-
-      if (profileKeyVersion) {
+      if (profileKeyVersion !== undefined) {
         profileUrl += `/${profileKeyVersion}`;
-      }
-      if (profileKeyVersion && profileKeyCredentialRequest) {
-        profileUrl += `/${profileKeyCredentialRequest}`;
+        if (profileKeyCredentialRequest !== undefined) {
+          profileUrl +=
+            `/${profileKeyCredentialRequest}` +
+            `?credentialType=${credentialType}`;
+        }
+      } else {
+        strictAssert(
+          profileKeyCredentialRequest === undefined,
+          'getProfileUrl called without version, but with request'
+        );
       }
 
       return profileUrl;
@@ -1303,27 +1525,34 @@ export function initialize({
 
     async function getProfile(
       identifier: string,
-      options: {
-        profileKeyVersion?: string;
-        profileKeyCredentialRequest?: string;
-      } = {}
+      options: GetProfileOptionsType
     ) {
-      const { profileKeyVersion, profileKeyCredentialRequest } = options;
+      const { profileKeyVersion, profileKeyCredentialRequest, userLanguages } =
+        options;
 
       return (await _ajax({
         call: 'profile',
         httpType: 'GET',
-        urlParameters: getProfileUrl(
-          identifier,
-          profileKeyVersion,
-          profileKeyCredentialRequest
-        ),
+        urlParameters: getProfileUrl(identifier, options),
+        headers: {
+          'Accept-Language': formatAcceptLanguageHeader(userLanguages),
+        },
         responseType: 'json',
         redactUrl: _createRedactor(
           identifier,
           profileKeyVersion,
           profileKeyCredentialRequest
         ),
+      })) as ProfileType;
+    }
+
+    async function getProfileForUsername(usernameToFetch: string) {
+      return (await _ajax({
+        call: 'profile',
+        httpType: 'GET',
+        urlParameters: `username/${usernameToFetch}`,
+        responseType: 'json',
+        redactUrl: _createRedactor(usernameToFetch),
       })) as ProfileType;
     }
 
@@ -1346,26 +1575,22 @@ export function initialize({
 
     async function getProfileUnauth(
       identifier: string,
-      options: {
-        accessKey: string;
-        profileKeyVersion?: string;
-        profileKeyCredentialRequest?: string;
-      }
+      options: GetProfileUnauthOptionsType
     ) {
       const {
         accessKey,
         profileKeyVersion,
         profileKeyCredentialRequest,
+        userLanguages,
       } = options;
 
       return (await _ajax({
         call: 'profile',
         httpType: 'GET',
-        urlParameters: getProfileUrl(
-          identifier,
-          profileKeyVersion,
-          profileKeyCredentialRequest
-        ),
+        urlParameters: getProfileUrl(identifier, options),
+        headers: {
+          'Accept-Language': formatAcceptLanguageHeader(userLanguages),
+        },
         responseType: 'json',
         unauthenticated: true,
         accessKey,
@@ -1375,6 +1600,34 @@ export function initialize({
           profileKeyCredentialRequest
         ),
       })) as ProfileType;
+    }
+
+    async function getBadgeImageFile(
+      imageFileUrl: string
+    ): Promise<Uint8Array> {
+      strictAssert(
+        isBadgeImageFileUrlValid(imageFileUrl, updatesUrl),
+        'getBadgeImageFile got an invalid URL. Was bad data saved?'
+      );
+
+      return _outerAjax(imageFileUrl, {
+        certificateAuthority,
+        contentType: 'application/octet-stream',
+        proxyUrl,
+        responseType: 'bytes',
+        timeout: 0,
+        type: 'GET',
+        redactUrl: (href: string) => {
+          const parsedUrl = maybeParseUrl(href);
+          if (!parsedUrl) {
+            return href;
+          }
+          const { pathname } = parsedUrl;
+          const pattern = RegExp(escapeRegExp(pathname), 'g');
+          return href.replace(pattern, `[REDACTED]${pathname.slice(-3)}`);
+        },
+        version,
+      });
     }
 
     async function getAvatar(path: string) {
@@ -1395,32 +1648,90 @@ export function initialize({
       });
     }
 
+    async function deleteUsername() {
+      await _ajax({
+        call: 'username',
+        httpType: 'DELETE',
+      });
+    }
+    async function putUsername(newUsername: string) {
+      await _ajax({
+        call: 'username',
+        httpType: 'PUT',
+        urlParameters: `/${newUsername}`,
+      });
+    }
+
     async function reportMessage(
-      senderE164: string,
+      senderUuid: string,
       serverGuid: string
     ): Promise<void> {
       await _ajax({
         call: 'reportMessage',
         httpType: 'POST',
-        urlParameters: `/${senderE164}/${serverGuid}`,
+        urlParameters: `/${senderUuid}/${serverGuid}`,
         responseType: 'bytes',
       });
     }
 
-    async function requestVerificationSMS(number: string) {
+    async function requestVerificationSMS(number: string, token: string) {
       await _ajax({
         call: 'accounts',
         httpType: 'GET',
-        urlParameters: `/sms/code/${number}`,
+        urlParameters: `/sms/code/${number}?captcha=${token}`,
       });
     }
 
-    async function requestVerificationVoice(number: string) {
+    async function requestVerificationVoice(number: string, token: string) {
       await _ajax({
         call: 'accounts',
         httpType: 'GET',
-        urlParameters: `/voice/code/${number}`,
+        urlParameters: `/voice/code/${number}?captcha=${token}`,
       });
+    }
+
+    async function checkAccountExistence(uuid: UUID) {
+      try {
+        await _ajax({
+          httpType: 'HEAD',
+          call: 'accountExistence',
+          urlParameters: `/${uuid.toString()}`,
+          unauthenticated: true,
+          accessKey: undefined,
+        });
+        return true;
+      } catch (error) {
+        if (error instanceof HTTPError && error.code === 404) {
+          return false;
+        }
+
+        throw error;
+      }
+    }
+
+    function startRegistration() {
+      strictAssert(
+        activeRegistration === undefined,
+        'Registration already in progress'
+      );
+
+      activeRegistration = explodePromise<void>();
+      log.info('WebAPI: starting registration');
+
+      return activeRegistration;
+    }
+
+    function finishRegistration(registration: unknown) {
+      strictAssert(activeRegistration !== undefined, 'No active registration');
+      strictAssert(
+        activeRegistration === registration,
+        'Invalid registration baton'
+      );
+
+      log.info('WebAPI: finishing registration');
+      const current = activeRegistration;
+      activeRegistration = undefined;
+      current.resolve();
     }
 
     async function confirmCode(
@@ -1429,7 +1740,7 @@ export function initialize({
       newPassword: string,
       registrationId: number,
       deviceName?: string | null,
-      options: { accessKey?: Uint8Array; uuid?: string } = {}
+      options: { accessKey?: Uint8Array } = {}
     ) {
       const capabilities: CapabilitiesUploadType = {
         announcementGroup: true,
@@ -1437,9 +1748,10 @@ export function initialize({
         'gv1-migration': true,
         senderKey: true,
         changeNumber: true,
+        stories: true,
       };
 
-      const { accessKey, uuid } = options;
+      const { accessKey } = options;
       const jsonData = {
         capabilities,
         fetchesMessages: true,
@@ -1465,15 +1777,16 @@ export function initialize({
       password = newPassword;
 
       const response = (await _ajax({
+        isRegistration: true,
         call,
         httpType: 'PUT',
         responseType: 'json',
         urlParameters: urlPrefix + code,
         jsonData,
-      })) as { uuid?: string; deviceId?: number };
+      })) as ConfirmCodeResultType;
 
       // Set final REST credentials to let `registerKeys` succeed.
-      username = `${uuid || response.uuid || number}.${response.deviceId || 1}`;
+      username = `${response.uuid || number}.${response.deviceId || 1}`;
       password = newPassword;
 
       return response;
@@ -1520,7 +1833,7 @@ export function initialize({
       }>;
     };
 
-    async function registerKeys(genKeys: KeysType) {
+    async function registerKeys(genKeys: KeysType, uuidKind: UUIDKind) {
       const preKeys = genKeys.preKeys.map(key => ({
         keyId: key.keyId,
         publicKey: Bytes.toBase64(key.publicKey),
@@ -1537,15 +1850,21 @@ export function initialize({
       };
 
       await _ajax({
+        isRegistration: true,
         call: 'keys',
+        urlParameters: `?${uuidKindToQuery(uuidKind)}`,
         httpType: 'PUT',
         jsonData: keys,
       });
     }
 
-    async function setSignedPreKey(signedPreKey: SignedPreKeyType) {
+    async function setSignedPreKey(
+      signedPreKey: SignedPreKeyType,
+      uuidKind: UUIDKind
+    ) {
       await _ajax({
         call: 'signed',
+        urlParameters: `?${uuidKindToQuery(uuidKind)}`,
         httpType: 'PUT',
         jsonData: {
           keyId: signedPreKey.keyId,
@@ -1559,9 +1878,10 @@ export function initialize({
       count: number;
     };
 
-    async function getMyKeys(): Promise<number> {
+    async function getMyKeys(uuidKind: UUIDKind): Promise<number> {
       const result = (await _ajax({
         call: 'keys',
+        urlParameters: `?${uuidKindToQuery(uuidKind)}`,
         httpType: 'GET',
         responseType: 'json',
         validateResponse: { count: 'number' },
@@ -1880,7 +2200,11 @@ export function initialize({
       });
 
       // Upload stickers
-      const queue = new PQueue({ concurrency: 3, timeout: 1000 * 60 * 2 });
+      const queue = new PQueue({
+        concurrency: 3,
+        timeout: 1000 * 60 * 2,
+        throwOnTimeout: true,
+      });
       await Promise.all(
         stickers.map(async (sticker: ServerAttachmentType, index: number) => {
           const stickerParams = makePutParams(
@@ -1908,18 +2232,27 @@ export function initialize({
     }
 
     async function getAttachment(cdnKey: string, cdnNumber?: number) {
+      const abortController = new AbortController();
+
       const cdnUrl = isNumber(cdnNumber)
         ? cdnUrlObject[cdnNumber] || cdnUrlObject['0']
         : cdnUrlObject['0'];
       // This is going to the CDN, not the service, so we use _outerAjax
-      return _outerAjax(`${cdnUrl}/attachments/${cdnKey}`, {
+      const stream = await _outerAjax(`${cdnUrl}/attachments/${cdnKey}`, {
         certificateAuthority,
         proxyUrl,
-        responseType: 'bytes',
+        responseType: 'stream',
         timeout: 0,
         type: 'GET',
         redactUrl: _createRedactor(cdnKey),
         version,
+        abortSignal: abortController.signal,
+      });
+
+      return getStreamWithTimeout(stream, {
+        name: `getAttachment(${cdnKey})`,
+        timeout: GET_ATTACHMENT_CHUNK_TIMEOUT,
+        abortController,
       });
     }
 
@@ -1967,7 +2300,7 @@ export function initialize({
       abortSignal: AbortSignal
     ) {
       return linkPreviewFetch.fetchLinkPreviewMetadata(
-        fetch,
+        fetchForLinkPreviews,
         href,
         abortSignal
       );
@@ -1977,7 +2310,11 @@ export function initialize({
       href: string,
       abortSignal: AbortSignal
     ) {
-      return linkPreviewFetch.fetchLinkPreviewImage(fetch, href, abortSignal);
+      return linkPreviewFetch.fetchLinkPreviewImage(
+        fetchForLinkPreviews,
+        href,
+        abortSignal
+      );
     }
 
     async function makeProxiedRequest(
@@ -2066,11 +2403,12 @@ export function initialize({
 
     async function getGroupCredentials(
       startDay: number,
-      endDay: number
+      endDay: number,
+      uuidKind: UUIDKind
     ): Promise<Array<GroupCredentialType>> {
       const response = (await _ajax({
         call: 'getGroupCredentials',
-        urlParameters: `/${startDay}/${endDay}`,
+        urlParameters: `/${startDay}/${endDay}?${uuidKindToQuery(uuidKind)}`,
         httpType: 'GET',
         responseType: 'json',
       })) as CredentialResponseType;
@@ -2099,15 +2437,8 @@ export function initialize({
     }
 
     function verifyAttributes(attributes: Proto.IAvatarUploadAttributes) {
-      const {
-        key,
-        credential,
-        acl,
-        algorithm,
-        date,
-        policy,
-        signature,
-      } = attributes;
+      const { key, credential, acl, algorithm, date, policy, signature } =
+        attributes;
 
       if (
         !key ||
@@ -2198,6 +2529,7 @@ export function initialize({
         timeout: 0,
         type: 'GET',
         version,
+        redactUrl: _createRedactor(key),
       });
     }
 
@@ -2299,13 +2631,42 @@ export function initialize({
     }
 
     async function getGroupLog(
-      startVersion: number,
-      options: GroupCredentialsType
+      options: GetGroupLogOptionsType,
+      credentials: GroupCredentialsType
     ): Promise<GroupLogResponseType> {
       const basicAuth = generateGroupAuth(
-        options.groupPublicParamsHex,
-        options.authCredentialPresentationHex
+        credentials.groupPublicParamsHex,
+        credentials.authCredentialPresentationHex
       );
+
+      const {
+        startVersion,
+        includeFirstState,
+        includeLastState,
+        maxSupportedChangeEpoch,
+      } = options;
+
+      // If we don't know starting revision - fetch it from the server
+      if (startVersion === undefined) {
+        const { data: joinedData } = await _ajax({
+          basicAuth,
+          call: 'groupJoinedAtVersion',
+          contentType: 'application/x-protobuf',
+          host: storageUrl,
+          httpType: 'GET',
+          responseType: 'byteswithdetails',
+        });
+
+        const { joinedAtVersion } = Proto.Member.decode(joinedData);
+
+        return getGroupLog(
+          {
+            ...options,
+            startVersion: joinedAtVersion,
+          },
+          credentials
+        );
+      }
 
       const withDetails = await _ajax({
         basicAuth,
@@ -2314,7 +2675,11 @@ export function initialize({
         host: storageUrl,
         httpType: 'GET',
         responseType: 'byteswithdetails',
-        urlParameters: `/${startVersion}`,
+        urlParameters:
+          `/${startVersion}?` +
+          `includeFirstState=${Boolean(includeFirstState)}&` +
+          `includeLastState=${Boolean(includeLastState)}&` +
+          `maxSupportedChangeEpoch=${Number(maxSupportedChangeEpoch)}`,
       });
       const { data, response } = withDetails;
       const changes = Proto.GroupChanges.decode(data);
@@ -2323,9 +2688,9 @@ export function initialize({
         const range = response.headers.get('Content-Range');
         const match = PARSE_GROUP_LOG_RANGE_HEADER.exec(range || '');
 
-        const start = match ? parseInt(match[0], 10) : undefined;
-        const end = match ? parseInt(match[1], 10) : undefined;
-        const currentRevision = match ? parseInt(match[2], 10) : undefined;
+        const start = match ? parseInt(match[1], 10) : undefined;
+        const end = match ? parseInt(match[2], 10) : undefined;
+        const currentRevision = match ? parseInt(match[3], 10) : undefined;
 
         if (
           match &&
@@ -2347,6 +2712,27 @@ export function initialize({
       };
     }
 
+    async function getHasSubscription(
+      subscriberId: Uint8Array
+    ): Promise<boolean> {
+      const formattedId = toWebSafeBase64(Bytes.toBase64(subscriberId));
+      const data = await _ajax({
+        call: 'subscriptions',
+        httpType: 'GET',
+        urlParameters: `/${formattedId}`,
+        responseType: 'json',
+        unauthenticated: true,
+        accessKey: undefined,
+        redactUrl: _createRedactor(formattedId),
+      });
+
+      return (
+        isRecord(data) &&
+        isRecord(data.subscription) &&
+        Boolean(data.subscription.active)
+      );
+    }
+
     function getProvisioningResource(
       handler: IRequestHandler
     ): Promise<WebSocketResource> {
@@ -2357,8 +2743,20 @@ export function initialize({
       username: string;
       password: string;
     }> {
+      strictAssert(directoryVersion === 1, 'Legacy CDS should not be used');
       return (await _ajax({
         call: 'directoryAuth',
+        httpType: 'GET',
+        responseType: 'json',
+      })) as { username: string; password: string };
+    }
+
+    async function getDirectoryAuthV2(): Promise<{
+      username: string;
+      password: string;
+    }> {
+      return (await _ajax({
+        call: 'directoryAuthV2',
         httpType: 'GET',
         responseType: 'json',
       })) as { username: string; password: string };
@@ -2371,6 +2769,9 @@ export function initialize({
       serverStaticPublic: Uint8Array;
       quote: Uint8Array;
     }) {
+      strictAssert(directoryVersion === 1, 'Legacy CDS should not be used');
+      strictAssert(directoryEnclaveId, 'Legacy CDS needs directoryEnclaveId');
+
       const SGX_CONSTANTS = getSgxConstants();
       const quote = Buffer.from(quoteBytes);
 
@@ -2458,6 +2859,8 @@ export function initialize({
       },
       encodedQuote: string
     ) {
+      strictAssert(directoryVersion === 1, 'Legacy CDS should not be used');
+
       // Parse timestamp as UTC
       const { timestamp } = signatureBody;
       const utcTimestamp = timestamp.endsWith('Z')
@@ -2485,6 +2888,12 @@ export function initialize({
       signatureBody: string,
       certificates: string
     ) {
+      strictAssert(directoryVersion === 1, 'Legacy CDS should not be used');
+      strictAssert(
+        directoryTrustAnchor,
+        'Legacy CDS needs directoryTrustAnchor'
+      );
+
       const CERT_PREFIX = '-----BEGIN CERTIFICATE-----';
       const pem = compact(
         certificates.split(CERT_PREFIX).map(match => {
@@ -2545,6 +2954,8 @@ export function initialize({
       username: string;
       password: string;
     }) {
+      strictAssert(directoryVersion === 1, 'Legacy CDS should not be used');
+
       const keyPair = generateKeyPair();
       const { privKey, pubKey } = keyPair;
       // Remove first "key type" byte from public key
@@ -2674,9 +3085,9 @@ export function initialize({
       };
     }
 
-    async function getUuidsForE164s(
+    async function getLegacyUuidsForE164s(
       e164s: ReadonlyArray<string>
-    ): Promise<Dictionary<string | null>> {
+    ): Promise<Dictionary<UUIDStringType | null>> {
       const directoryAuth = await getDirectoryAuth();
       const attestationResult = await putRemoteAttestation(directoryAuth);
 
@@ -2713,9 +3124,9 @@ export function initialize({
       };
 
       // Decode discovery request response
-      const decodedDiscoveryResponse = (mapValues(discoveryResponse, value => {
+      const decodedDiscoveryResponse = mapValues(discoveryResponse, value => {
         return Bytes.fromBase64(value);
-      }) as unknown) as {
+      }) as unknown as {
         [K in keyof typeof discoveryResponse]: Uint8Array;
       };
 
@@ -2748,6 +3159,40 @@ export function initialize({
       }
 
       return zipObject(e164s, uuids);
+    }
+
+    async function getUuidsForE164s(
+      e164s: ReadonlyArray<string>
+    ): Promise<Dictionary<UUIDStringType | null>> {
+      if (directoryVersion === 1) {
+        return getLegacyUuidsForE164s(e164s);
+      }
+
+      const auth = await getDirectoryAuthV2();
+
+      const dictionary = await cdsSocketManager.request({
+        version: 1,
+        auth,
+        e164s,
+      });
+
+      return mapValues(dictionary, value => value.aci ?? null);
+    }
+
+    async function getUuidsForE164sV2({
+      e164s,
+      acis,
+      accessKeys,
+    }: GetUuidsForE164sV2OptionsType): Promise<CDSResponseType> {
+      const auth = await getDirectoryAuthV2();
+
+      return cdsSocketManager.request({
+        version: 2,
+        auth,
+        e164s,
+        acis,
+        accessKeys,
+      });
     }
   }
 }

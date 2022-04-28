@@ -1,4 +1,4 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { get, throttle } from 'lodash';
@@ -8,24 +8,25 @@ import * as log from './logging/log';
 
 export type ConfigKeyType =
   | 'desktop.announcementGroup'
+  | 'desktop.calling.audioLevelForSpeaking'
   | 'desktop.clientExpiration'
-  | 'desktop.customizePreferredReactions'
-  | 'desktop.disableGV1'
   | 'desktop.groupCallOutboundRing'
-  | 'desktop.groupCalling'
-  | 'desktop.gv2'
   | 'desktop.internalUser'
   | 'desktop.mandatoryProfileSharing'
   | 'desktop.mediaQuality.levels'
+  | 'desktop.messageCleanup'
   | 'desktop.messageRequests'
   | 'desktop.retryReceiptLifespan'
   | 'desktop.retryRespondMaxAge'
-  | 'desktop.screensharing2'
-  | 'desktop.senderKey.send'
   | 'desktop.senderKey.retry'
+  | 'desktop.senderKey.send'
+  | 'desktop.senderKeyMaxAge'
   | 'desktop.sendSenderKey3'
-  | 'desktop.storage'
-  | 'desktop.storageWrite3'
+  | 'desktop.showUserBadges.beta'
+  | 'desktop.showUserBadges2'
+  | 'desktop.stories'
+  | 'desktop.usernames'
+  | 'global.attachments.maxBytes'
   | 'global.calling.maxGroupCallRingSize'
   | 'global.groupsv2.groupSizeHardLimit'
   | 'global.groupsv2.maxGroupSize';
@@ -35,7 +36,9 @@ type ConfigValueType = {
   enabledAt?: number;
   value?: unknown;
 };
-export type ConfigMapType = { [key: string]: ConfigValueType };
+export type ConfigMapType = {
+  [key in ConfigKeyType]?: ConfigValueType;
+};
 type ConfigListenerType = (value: ConfigValueType) => unknown;
 type ConfigListenersMapType = {
   [key: string]: Array<ConfigListenerType>;

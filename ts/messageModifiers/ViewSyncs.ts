@@ -5,16 +5,16 @@
 
 import { Collection, Model } from 'backbone';
 
-import { MessageModel } from '../models/messages';
+import type { MessageModel } from '../models/messages';
 import { ReadStatus } from '../messages/MessageReadStatus';
 import { markViewed } from '../services/MessageUpdater';
-import { isIncoming } from '../state/selectors/message';
+import { isIncoming, isStory } from '../state/selectors/message';
 import { notificationService } from '../services/notifications';
 import * as log from '../logging/log';
 
-type ViewSyncAttributesType = {
+export type ViewSyncAttributesType = {
   senderId: string;
-  senderE164: string;
+  senderE164?: string;
   senderUuid: string;
   timestamp: number;
   viewedAt: number;
@@ -58,19 +58,19 @@ export class ViewSyncs extends Collection {
   async onSync(sync: ViewSyncModel): Promise<void> {
     try {
       const messages = await window.Signal.Data.getMessagesBySentAt(
-        sync.get('timestamp'),
-        {
-          MessageCollection: window.Whisper.MessageCollection,
-        }
+        sync.get('timestamp')
       );
 
       const found = messages.find(item => {
         const senderId = window.ConversationController.ensureContactIds({
-          e164: item.get('source'),
-          uuid: item.get('sourceUuid'),
+          e164: item.source,
+          uuid: item.sourceUuid,
         });
 
-        return isIncoming(item.attributes) && senderId === sync.get('senderId');
+        return (
+          (isIncoming(item) || isStory(item)) &&
+          senderId === sync.get('senderId')
+        );
       });
 
       if (!found) {

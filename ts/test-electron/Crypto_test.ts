@@ -165,12 +165,18 @@ describe('Crypto', () => {
 
   describe('generateRegistrationId', () => {
     it('generates an integer between 0 and 16383 (inclusive)', () => {
+      let max = 0;
       for (let i = 0; i < 100; i += 1) {
         const id = generateRegistrationId();
         assert.isAtLeast(id, 0);
         assert.isAtMost(id, 16383);
         assert(Number.isInteger(id));
+
+        max = Math.max(max, id);
       }
+
+      // Probability of this being false is ~ 10^{-181}
+      assert.isAtLeast(max, 0x100);
     });
   });
 
@@ -182,7 +188,7 @@ describe('Crypto', () => {
       const result = deriveSecrets(input, salt, info);
       assert.lengthOf(result, 3);
       result.forEach(part => {
-        // This is a smoke test; HKDF is tested as part of @signalapp/signal-client.
+        // This is a smoke test; HKDF is tested as part of @signalapp/libsignal-client.
         assert.instanceOf(part, Uint8Array);
         assert.strictEqual(part.byteLength, 32);
       });
@@ -438,22 +444,8 @@ describe('Crypto', () => {
   describe('uuidToBytes', () => {
     it('converts valid UUIDs to Uint8Arrays', () => {
       const expectedResult = new Uint8Array([
-        0x22,
-        0x6e,
-        0x44,
-        0x02,
-        0x7f,
-        0xfc,
-        0x45,
-        0x43,
-        0x85,
-        0xc9,
-        0x46,
-        0x22,
-        0xc5,
-        0x0a,
-        0x5b,
-        0x14,
+        0x22, 0x6e, 0x44, 0x02, 0x7f, 0xfc, 0x45, 0x43, 0x85, 0xc9, 0x46, 0x22,
+        0xc5, 0x0a, 0x5b, 0x14,
       ]);
 
       assert.deepEqual(
@@ -483,22 +475,8 @@ describe('Crypto', () => {
   describe('bytesToUuid', () => {
     it('converts valid Uint8Arrays to UUID strings', () => {
       const buf = new Uint8Array([
-        0x22,
-        0x6e,
-        0x44,
-        0x02,
-        0x7f,
-        0xfc,
-        0x45,
-        0x43,
-        0x85,
-        0xc9,
-        0x46,
-        0x22,
-        0xc5,
-        0x0a,
-        0x5b,
-        0x14,
+        0x22, 0x6e, 0x44, 0x02, 0x7f, 0xfc, 0x45, 0x43, 0x85, 0xc9, 0x46, 0x22,
+        0xc5, 0x0a, 0x5b, 0x14,
       ]);
 
       assert.deepEqual(

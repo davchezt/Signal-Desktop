@@ -1,4 +1,4 @@
-// Copyright 2019-2021 Signal Messenger, LLC
+// Copyright 2019-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { isNumber, pick, reject, groupBy, values } from 'lodash';
@@ -10,7 +10,12 @@ import { dropNull } from '../util/dropNull';
 import { makeLookup } from '../util/makeLookup';
 import { maybeParseUrl } from '../util/url';
 import * as Bytes from '../Bytes';
+import * as Errors from './errors';
 import { deriveStickerPackKey, decryptAttachment } from '../Crypto';
+import type { MIMEType } from './MIME';
+import { IMAGE_WEBP } from './MIME';
+import { sniffImageMimeType } from '../util/sniffImageMimeType';
+import type { AttachmentType } from './Attachment';
 import type {
   StickerType,
   StickerPackType,
@@ -19,6 +24,7 @@ import type {
 import Data from '../sql/Client';
 import { SignalService as Proto } from '../protobuf';
 import * as log from '../logging/log';
+import type { StickersStateType } from '../state/ducks/stickers';
 
 export type RecentStickerType = Readonly<{
   stickerId: number;
@@ -26,12 +32,6 @@ export type RecentStickerType = Readonly<{
 }>;
 
 export type BlessedType = Pick<StickerPackType, 'key' | 'status'>;
-
-export type InitialState = {
-  packs: Record<string, StickerPackType>;
-  recentStickers: Array<RecentStickerType>;
-  blessedPacks: Record<string, boolean>;
-};
 
 export type DownloadMap = Record<
   string,
@@ -81,7 +81,7 @@ const STICKER_PACK_DEFAULTS: StickerPackType = {
 
 const VALID_PACK_ID_REGEXP = /^[0-9a-f]{32}$/i;
 
-let initialState: InitialState | undefined;
+let initialState: StickersStateType | undefined;
 let packsToDownload: DownloadMap | undefined;
 const downloadQueue = new Queue({ concurrency: 1, timeout: 1000 * 60 * 2 });
 
@@ -100,6 +100,7 @@ export async function load(): Promise<void> {
     packs,
     recentStickers,
     blessedPacks,
+    installedPack: null,
   };
 
   packsToDownload = capturePacksToDownload(packs);
@@ -158,7 +159,7 @@ export function downloadQueuedPacks(): void {
     const { key, status } = packsToDownload[id];
 
     // The queuing is done inside this function, no need to await here
-    downloadStickerPack(id, key, { finalStatus: status });
+    downloadStickerPack(id, key, { finalStatus: status, suppressError: true });
   }
 
   packsToDownload = {};
@@ -224,20 +225,17 @@ function doesPackNeedDownload(pack?: StickerPackType): boolean {
   }
 
   const { status, stickerCount } = pack;
-  const stickersDownloaded = Object.keys(pack.stickers || {}).length;
 
-  if (
-    (status === 'installed' || status === 'downloaded') &&
-    stickerCount > 0 &&
-    stickersDownloaded >= stickerCount
-  ) {
+  if ((status === 'installed' || status === 'downloaded') && stickerCount > 0) {
     return false;
   }
 
   // If we don't understand a pack's status, we'll download it
   // If a pack has any other status, we'll download it
   // If a pack has zero stickers in it, we'll download it
-  // If a pack doesn't have enough downloaded stickers, we'll download it
+
+  // Note: If a pack downloaded with less than the expected number of stickers, we're
+  //   okay with that.
 
   return true;
 }
@@ -265,7 +263,7 @@ async function getRecentStickersForRedux(): Promise<Array<RecentStickerType>> {
   }));
 }
 
-export function getInitialState(): InitialState {
+export function getInitialState(): StickersStateType {
   strictAssert(initialState !== undefined, 'Stickers not initialized');
   return initialState;
 }
@@ -370,11 +368,8 @@ export async function downloadEphemeralPack(
   packId: string,
   packKey: string
 ): Promise<void> {
-  const {
-    stickerAdded,
-    stickerPackAdded,
-    stickerPackUpdated,
-  } = getReduxStickerActions();
+  const { stickerAdded, stickerPackAdded, stickerPackUpdated } =
+    getReduxStickerActions();
 
   const existingPack = getStickerPack(packId);
   if (
@@ -442,10 +437,20 @@ export async function downloadEphemeralPack(
 
     const downloadStickerJob = async (
       stickerProto: Proto.StickerPack.ISticker
-    ): Promise<void> => {
-      const stickerInfo = await downloadSticker(packId, packKey, stickerProto, {
-        ephemeral: true,
-      });
+    ): Promise<boolean> => {
+      let stickerInfo;
+      try {
+        stickerInfo = await downloadSticker(packId, packKey, stickerProto, {
+          ephemeral: true,
+        });
+      } catch (error: unknown) {
+        log.error(
+          `downloadEphemeralPack/downloadStickerJob error: ${Errors.toLogFormat(
+            error
+          )}`
+        );
+        return false;
+      }
       const sticker = {
         ...stickerInfo,
         isCoverOnly: !coverIncludedInList && stickerInfo.id === coverStickerId,
@@ -461,15 +466,21 @@ export async function downloadEphemeralPack(
       }
 
       stickerAdded(sticker);
+      return true;
     };
 
     // Download the cover first
     await downloadStickerJob(coverProto);
 
     // Then the rest
-    await pMap(nonCoverStickers, downloadStickerJob, {
+    const jobResults = await pMap(nonCoverStickers, downloadStickerJob, {
       concurrency: 3,
     });
+
+    const successfulStickerCount = jobResults.filter(item => item).length;
+    if (successfulStickerCount === 0 && nonCoverStickers.length !== 0) {
+      throw new Error('downloadEphemeralPack: All stickers failed to download');
+    }
   } catch (error) {
     // Because the user could install this pack while we are still downloading this
     //   ephemeral pack, we don't want to go change its status unless we're still in
@@ -492,6 +503,7 @@ export type DownloadStickerPackOptions = Readonly<{
   messageId?: string;
   fromSync?: boolean;
   finalStatus?: StickerPackStatusType;
+  suppressError?: boolean;
 }>;
 
 export async function downloadStickerPack(
@@ -519,6 +531,7 @@ async function doDownloadStickerPack(
     finalStatus = 'downloaded',
     messageId,
     fromSync = false,
+    suppressError = false,
   }: DownloadStickerPackOptions
 ): Promise<void> {
   const {
@@ -536,11 +549,6 @@ async function doDownloadStickerPack(
 
   const existing = getStickerPack(packId);
   if (!doesPackNeedDownload(existing)) {
-    log.warn(
-      `Download for pack ${redactPackId(
-        packId
-      )} requested, but it does not need re-download. Skipping.`
-    );
     return;
   }
 
@@ -557,9 +565,13 @@ async function doDownloadStickerPack(
 
     if (existing && existing.status !== 'error') {
       await Data.updateStickerPackStatus(packId, 'error');
-      stickerPackUpdated(packId, {
-        status: 'error',
-      });
+      stickerPackUpdated(
+        packId,
+        {
+          status: 'error',
+        },
+        { suppressError }
+      );
     }
 
     return;
@@ -650,7 +662,7 @@ async function doDownloadStickerPack(
       status: 'error' as const,
     };
     await Data.createOrUpdateStickerPack(pack);
-    stickerPackAdded(pack);
+    stickerPackAdded(pack, { suppressError });
 
     return;
   }
@@ -660,23 +672,43 @@ async function doDownloadStickerPack(
   try {
     const downloadStickerJob = async (
       stickerProto: Proto.StickerPack.ISticker
-    ): Promise<void> => {
-      const stickerInfo = await downloadSticker(packId, packKey, stickerProto);
-      const sticker = {
-        ...stickerInfo,
-        isCoverOnly: !coverIncludedInList && stickerInfo.id === coverStickerId,
-      };
-      await Data.createOrUpdateSticker(sticker);
-      stickerAdded(sticker);
+    ): Promise<boolean> => {
+      try {
+        const stickerInfo = await downloadSticker(
+          packId,
+          packKey,
+          stickerProto
+        );
+        const sticker = {
+          ...stickerInfo,
+          isCoverOnly:
+            !coverIncludedInList && stickerInfo.id === coverStickerId,
+        };
+        await Data.createOrUpdateSticker(sticker);
+        stickerAdded(sticker);
+        return true;
+      } catch (error: unknown) {
+        log.error(
+          `doDownloadStickerPack/downloadStickerJob error: ${Errors.toLogFormat(
+            error
+          )}`
+        );
+        return false;
+      }
     };
 
     // Download the cover first
     await downloadStickerJob(coverProto);
 
     // Then the rest
-    await pMap(nonCoverStickers, downloadStickerJob, {
+    const jobResults = await pMap(nonCoverStickers, downloadStickerJob, {
       concurrency: 3,
     });
+
+    const successfulStickerCount = jobResults.filter(item => item).length;
+    if (successfulStickerCount === 0 && nonCoverStickers.length !== 0) {
+      throw new Error('doDownloadStickerPack: All stickers failed to download');
+    }
 
     // Allow for the user marking this pack as installed in the middle of our download;
     //   don't overwrite that status.
@@ -703,10 +735,14 @@ async function doDownloadStickerPack(
     const errorStatus = 'error';
     await Data.updateStickerPackStatus(packId, errorStatus);
     if (stickerPackUpdated) {
-      stickerPackUpdated(packId, {
-        attemptedStatus: finalStatus,
-        status: errorStatus,
-      });
+      stickerPackUpdated(
+        packId,
+        {
+          attemptedStatus: finalStatus,
+          status: errorStatus,
+        },
+        { suppressError }
+      );
     }
   }
 }
@@ -749,21 +785,40 @@ export function getSticker(
 export async function copyStickerToAttachments(
   packId: string,
   stickerId: number
-): Promise<StickerType | undefined> {
+): Promise<AttachmentType> {
   const sticker = getSticker(packId, stickerId);
   if (!sticker) {
-    return undefined;
+    throw new Error(
+      `copyStickerToAttachments: Failed to find sticker ${packId}/${stickerId}`
+    );
   }
 
-  const { path } = sticker;
-  const absolutePath = window.Signal.Migrations.getAbsoluteStickerPath(path);
-  const newPath = await window.Signal.Migrations.copyIntoAttachmentsDirectory(
-    absolutePath
-  );
+  const { path: stickerPath } = sticker;
+  const absolutePath =
+    window.Signal.Migrations.getAbsoluteStickerPath(stickerPath);
+  const { path, size } =
+    await window.Signal.Migrations.copyIntoAttachmentsDirectory(absolutePath);
+
+  const { data } = await window.Signal.Migrations.loadAttachmentData({
+    path,
+  });
+
+  let contentType: MIMEType;
+  const sniffedMimeType = sniffImageMimeType(data);
+  if (sniffedMimeType) {
+    contentType = sniffedMimeType;
+  } else {
+    log.warn(
+      'copyStickerToAttachments: Unable to sniff sticker MIME type; falling back to WebP'
+    );
+    contentType = IMAGE_WEBP;
+  }
 
   return {
     ...sticker,
-    path: newPath,
+    contentType,
+    path,
+    size,
   };
 }
 

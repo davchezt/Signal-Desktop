@@ -1,10 +1,11 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { LoggerType } from '../types/Logging';
+import type { LoggerType } from '../types/Logging';
 import { maybeParseUrl } from './url';
 import { isValidE164 } from './isValidE164';
 
+const SIGNAL_HOSTS = new Set(['signal.group', 'signal.art', 'signal.me']);
 const SIGNAL_DOT_ME_HASH_PREFIX = 'p/';
 
 function parseUrl(value: string | URL, logger: LoggerType): undefined | URL {
@@ -44,14 +45,12 @@ export function isSignalHttpsLink(
       !url.password &&
       !url.port &&
       url.protocol === 'https:' &&
-      (url.host === 'signal.group' ||
-        url.host === 'signal.art' ||
-        url.host === 'signal.me')
+      SIGNAL_HOSTS.has(url.host)
   );
 }
 
 type ParsedSgnlHref =
-  | { command: null; args: Map<never, never> }
+  | { command: null; args: Map<never, never>; hash: undefined }
   | { command: string; args: Map<string, string>; hash: string | undefined };
 export function parseSgnlHref(
   href: string,
@@ -59,7 +58,7 @@ export function parseSgnlHref(
 ): ParsedSgnlHref {
   const url = parseUrl(href, logger);
   if (!url || !isSgnlHref(url, logger)) {
-    return { command: null, args: new Map<never, never>() };
+    return { command: null, args: new Map<never, never>(), hash: undefined };
   }
 
   const args = new Map<string, string>();
@@ -99,7 +98,7 @@ export function parseSignalHttpsLink(
 ): ParsedSgnlHref {
   const url = parseUrl(href, logger);
   if (!url || !isSignalHttpsLink(url, logger)) {
-    return { command: null, args: new Map<never, never>() };
+    return { command: null, args: new Map<never, never>(), hash: undefined };
   }
 
   if (url.host === 'signal.art') {
@@ -114,7 +113,7 @@ export function parseSignalHttpsLink(
     });
 
     if (!args.get('pack_id') || !args.get('pack_key')) {
-      return { command: null, args: new Map<never, never>() };
+      return { command: null, args: new Map<never, never>(), hash: undefined };
     }
 
     return {
@@ -132,7 +131,7 @@ export function parseSignalHttpsLink(
     };
   }
 
-  return { command: null, args: new Map<never, never>() };
+  return { command: null, args: new Map<never, never>(), hash: undefined };
 }
 
 export function parseE164FromSignalDotMeHash(hash: string): undefined | string {
@@ -142,4 +141,26 @@ export function parseE164FromSignalDotMeHash(hash: string): undefined | string {
 
   const maybeE164 = hash.slice(SIGNAL_DOT_ME_HASH_PREFIX.length);
   return isValidE164(maybeE164, true) ? maybeE164 : undefined;
+}
+
+/**
+ * Converts `http://signal.group/#abc` to `https://signal.group/#abc`. Does the same for
+ * other Signal hosts, like signal.me. Does nothing to other URLs. Expects a valid href.
+ */
+export function rewriteSignalHrefsIfNecessary(href: string): string {
+  const resultUrl = new URL(href);
+
+  const isHttp = resultUrl.protocol === 'http:';
+  const isHttpOrHttps = isHttp || resultUrl.protocol === 'https:';
+
+  if (SIGNAL_HOSTS.has(resultUrl.host) && isHttpOrHttps) {
+    if (isHttp) {
+      resultUrl.protocol = 'https:';
+    }
+    resultUrl.username = '';
+    resultUrl.password = '';
+    return resultUrl.href;
+  }
+
+  return href;
 }

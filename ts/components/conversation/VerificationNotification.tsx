@@ -6,7 +6,7 @@ import React from 'react';
 import { SystemMessage } from './SystemMessage';
 import { ContactName } from './ContactName';
 import { Intl } from '../Intl';
-import { LocalizerType } from '../../types/Util';
+import type { LocalizerType } from '../../types/Util';
 
 import { missingCaseError } from '../../util/missingCaseError';
 
@@ -61,7 +61,7 @@ export class VerificationNotification extends React.Component<Props> {
     );
   }
 
-  public render(): JSX.Element {
+  public override render(): JSX.Element {
     const { type } = this.props;
     const icon = type === 'markVerified' ? 'verified' : 'verified-not';
 

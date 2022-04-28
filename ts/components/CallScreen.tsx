@@ -1,18 +1,12 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import React, {
-  ReactNode,
-  useState,
-  useRef,
-  useEffect,
-  useCallback,
-} from 'react';
+import type { ReactNode } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { noop } from 'lodash';
 import classNames from 'classnames';
 import type { VideoFrameSource } from 'ringrtc';
-import {
-  HangUpType,
+import type {
   SetLocalAudioType,
   SetLocalPreviewType,
   SetLocalVideoType,
@@ -23,43 +17,38 @@ import { CallingHeader } from './CallingHeader';
 import { CallingPreCallInfo, RingMode } from './CallingPreCallInfo';
 import { CallingButton, CallingButtonType } from './CallingButton';
 import { CallBackgroundBlur } from './CallBackgroundBlur';
-import {
+import type {
   ActiveCallType,
+  GroupCallVideoRequest,
+  PresentedSource,
+} from '../types/Calling';
+import {
   CallMode,
   CallState,
   GroupCallConnectionState,
   GroupCallJoinState,
-  GroupCallVideoRequest,
-  PresentedSource,
 } from '../types/Calling';
-import { AvatarColors, AvatarColorType } from '../types/Colors';
+import { AvatarColors } from '../types/Colors';
 import type { ConversationType } from '../state/ducks/conversations';
 import { CallingToastManager } from './CallingToastManager';
 import { DirectCallRemoteParticipant } from './DirectCallRemoteParticipant';
 import { GroupCallRemoteParticipants } from './GroupCallRemoteParticipants';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 import { NeedsScreenRecordingPermissionsModal } from './NeedsScreenRecordingPermissionsModal';
 import { missingCaseError } from '../util/missingCaseError';
+import * as KeyboardLayout from '../services/keyboardLayout';
 import { useActivateSpeakerViewOnPresenting } from '../hooks/useActivateSpeakerViewOnPresenting';
+import { CallingAudioIndicator } from './CallingAudioIndicator';
 
 export type PropsType = {
   activeCall: ActiveCallType;
   getGroupCallVideoFrameSource: (demuxId: number) => VideoFrameSource;
   getPresentingSources: () => void;
   groupMembers?: Array<Pick<ConversationType, 'id' | 'firstName' | 'title'>>;
-  hangUp: (_: HangUpType) => void;
+  hangUpActiveCall: () => void;
   i18n: LocalizerType;
   joinedAt?: number;
-  me: {
-    avatarPath?: string;
-    color?: AvatarColorType;
-    id: string;
-    name?: string;
-    phoneNumber?: string;
-    profileName?: string;
-    title: string;
-    uuid: string;
-  };
+  me: ConversationType;
   openSystemPreferencesAction: () => unknown;
   setGroupCallVideoRequest: (_: Array<GroupCallVideoRequest>) => void;
   setLocalAudio: (_: SetLocalAudioType) => void;
@@ -115,7 +104,7 @@ export const CallScreen: React.FC<PropsType> = ({
   getGroupCallVideoFrameSource,
   getPresentingSources,
   groupMembers,
-  hangUp,
+  hangUpActiveCall,
   i18n,
   joinedAt,
   me,
@@ -137,6 +126,7 @@ export const CallScreen: React.FC<PropsType> = ({
     conversation,
     hasLocalAudio,
     hasLocalVideo,
+    amISpeaking,
     isInSpeakerView,
     presentingSource,
     remoteParticipants,
@@ -205,10 +195,12 @@ export const CallScreen: React.FC<PropsType> = ({
     const handleKeyDown = (event: KeyboardEvent): void => {
       let eventHandled = false;
 
-      if (event.shiftKey && (event.key === 'V' || event.key === 'v')) {
+      const key = KeyboardLayout.lookup(event);
+
+      if (event.shiftKey && (key === 'V' || key === 'v')) {
         toggleVideo();
         eventHandled = true;
-      } else if (event.shiftKey && (event.key === 'M' || event.key === 'm')) {
+      } else if (event.shiftKey && (key === 'M' || key === 'm')) {
         toggleAudio();
         eventHandled = true;
       }
@@ -297,6 +289,7 @@ export const CallScreen: React.FC<PropsType> = ({
           isInSpeakerView={isInSpeakerView}
           remoteParticipants={activeCall.remoteParticipants}
           setGroupCallVideoRequest={setGroupCallVideoRequest}
+          speakingDemuxIds={activeCall.speakingDemuxIds}
         />
       );
       break;
@@ -325,6 +318,7 @@ export const CallScreen: React.FC<PropsType> = ({
             <Avatar
               acceptedMessageRequest
               avatarPath={me.avatarPath}
+              badge={undefined}
               color={me.color || AvatarColors[0]}
               noteToSelf={false}
               conversationType="direct"
@@ -362,6 +356,7 @@ export const CallScreen: React.FC<PropsType> = ({
         <Avatar
           acceptedMessageRequest
           avatarPath={me.avatarPath}
+          badge={undefined}
           color={me.color || AvatarColors[0]}
           noteToSelf={false}
           conversationType="direct"
@@ -505,17 +500,15 @@ export const CallScreen: React.FC<PropsType> = ({
             i18n={i18n}
             onMouseEnter={onControlsMouseEnter}
             onMouseLeave={onControlsMouseLeave}
-            onClick={() => {
-              hangUp({ conversationId: conversation.id });
-            }}
+            onClick={hangUpActiveCall}
           />
         </div>
-        <div
-          className={classNames('module-ongoing-call__footer__local-preview', {
-            'module-ongoing-call__footer__local-preview--audio-muted': !hasLocalAudio,
-          })}
-        >
+        <div className="module-ongoing-call__footer__local-preview">
           {localPreviewNode}
+          <CallingAudioIndicator
+            hasAudio={hasLocalAudio}
+            isSpeaking={amISpeaking}
+          />
         </div>
       </div>
     </div>

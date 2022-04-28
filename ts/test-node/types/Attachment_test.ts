@@ -9,46 +9,24 @@ import { SignalService } from '../../protobuf';
 import * as Bytes from '../../Bytes';
 import * as logger from '../../logging/log';
 
+import { fakeAttachment } from '../../test-both/helpers/fakeAttachment';
+import { DAY } from '../../util/durations';
+
 describe('Attachment', () => {
-  describe('getUploadSizeLimitKb', () => {
-    const { getUploadSizeLimitKb } = Attachment;
-
-    it('returns 6000 kilobytes for supported non-GIF images', () => {
-      assert.strictEqual(getUploadSizeLimitKb(MIME.IMAGE_JPEG), 6000);
-      assert.strictEqual(getUploadSizeLimitKb(MIME.IMAGE_PNG), 6000);
-      assert.strictEqual(getUploadSizeLimitKb(MIME.IMAGE_WEBP), 6000);
-    });
-
-    it('returns 25000 kilobytes for GIFs', () => {
-      assert.strictEqual(getUploadSizeLimitKb(MIME.IMAGE_GIF), 25000);
-    });
-
-    it('returns 100000 for other file types', () => {
-      assert.strictEqual(getUploadSizeLimitKb(MIME.APPLICATION_JSON), 100000);
-      assert.strictEqual(getUploadSizeLimitKb(MIME.AUDIO_AAC), 100000);
-      assert.strictEqual(getUploadSizeLimitKb(MIME.AUDIO_MP3), 100000);
-      assert.strictEqual(getUploadSizeLimitKb(MIME.VIDEO_MP4), 100000);
-      assert.strictEqual(
-        getUploadSizeLimitKb('image/vnd.adobe.photoshop' as MIME.MIMEType),
-        100000
-      );
-    });
-  });
-
   describe('getFileExtension', () => {
     it('should return file extension from content type', () => {
-      const input: Attachment.AttachmentType = {
+      const input: Attachment.AttachmentType = fakeAttachment({
         data: Bytes.fromString('foo'),
         contentType: MIME.IMAGE_GIF,
-      };
+      });
       assert.strictEqual(Attachment.getFileExtension(input), 'gif');
     });
 
     it('should return file extension for QuickTime videos', () => {
-      const input: Attachment.AttachmentType = {
+      const input: Attachment.AttachmentType = fakeAttachment({
         data: Bytes.fromString('foo'),
         contentType: MIME.VIDEO_QUICKTIME,
-      };
+      });
       assert.strictEqual(Attachment.getFileExtension(input), 'mov');
     });
   });
@@ -56,11 +34,11 @@ describe('Attachment', () => {
   describe('getSuggestedFilename', () => {
     context('for attachment with filename', () => {
       it('should return existing filename if present', () => {
-        const attachment: Attachment.AttachmentType = {
+        const attachment: Attachment.AttachmentType = fakeAttachment({
           fileName: 'funny-cat.mov',
           data: Bytes.fromString('foo'),
           contentType: MIME.VIDEO_QUICKTIME,
-        };
+        });
         const actual = Attachment.getSuggestedFilename({ attachment });
         const expected = 'funny-cat.mov';
         assert.strictEqual(actual, expected);
@@ -68,32 +46,36 @@ describe('Attachment', () => {
     });
     context('for attachment without filename', () => {
       it('should generate a filename based on timestamp', () => {
-        const attachment: Attachment.AttachmentType = {
+        const attachment: Attachment.AttachmentType = fakeAttachment({
           data: Bytes.fromString('foo'),
           contentType: MIME.VIDEO_QUICKTIME,
-        };
-        const timestamp = new Date(new Date(0).getTimezoneOffset() * 60 * 1000);
+        });
+        const timestamp = new Date(
+          DAY + new Date(DAY).getTimezoneOffset() * 60 * 1000
+        );
         const actual = Attachment.getSuggestedFilename({
           attachment,
           timestamp,
         });
-        const expected = 'signal-1970-01-01-000000.mov';
+        const expected = 'signal-1970-01-02-000000.mov';
         assert.strictEqual(actual, expected);
       });
     });
     context('for attachment with index', () => {
       it('should generate a filename based on timestamp', () => {
-        const attachment: Attachment.AttachmentType = {
+        const attachment: Attachment.AttachmentType = fakeAttachment({
           data: Bytes.fromString('foo'),
           contentType: MIME.VIDEO_QUICKTIME,
-        };
-        const timestamp = new Date(new Date(0).getTimezoneOffset() * 60 * 1000);
+        });
+        const timestamp = new Date(
+          DAY + new Date(DAY).getTimezoneOffset() * 60 * 1000
+        );
         const actual = Attachment.getSuggestedFilename({
           attachment,
           timestamp,
           index: 3,
         });
-        const expected = 'signal-1970-01-01-000000_003.mov';
+        const expected = 'signal-1970-01-02-000000_003.mov';
         assert.strictEqual(actual, expected);
       });
     });
@@ -101,107 +83,107 @@ describe('Attachment', () => {
 
   describe('isVisualMedia', () => {
     it('should return true for images', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'meme.gif',
         data: Bytes.fromString('gif'),
         contentType: MIME.IMAGE_GIF,
-      };
+      });
       assert.isTrue(Attachment.isVisualMedia(attachment));
     });
 
     it('should return true for videos', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'meme.mp4',
         data: Bytes.fromString('mp4'),
         contentType: MIME.VIDEO_MP4,
-      };
+      });
       assert.isTrue(Attachment.isVisualMedia(attachment));
     });
 
     it('should return false for voice message attachment', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'Voice Message.aac',
         flags: SignalService.AttachmentPointer.Flags.VOICE_MESSAGE,
         data: Bytes.fromString('voice message'),
         contentType: MIME.AUDIO_AAC,
-      };
+      });
       assert.isFalse(Attachment.isVisualMedia(attachment));
     });
 
     it('should return false for other attachments', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'foo.json',
         data: Bytes.fromString('{"foo": "bar"}'),
         contentType: MIME.APPLICATION_JSON,
-      };
+      });
       assert.isFalse(Attachment.isVisualMedia(attachment));
     });
   });
 
   describe('isFile', () => {
     it('should return true for JSON', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'foo.json',
         data: Bytes.fromString('{"foo": "bar"}'),
         contentType: MIME.APPLICATION_JSON,
-      };
+      });
       assert.isTrue(Attachment.isFile(attachment));
     });
 
     it('should return false for images', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'meme.gif',
         data: Bytes.fromString('gif'),
         contentType: MIME.IMAGE_GIF,
-      };
+      });
       assert.isFalse(Attachment.isFile(attachment));
     });
 
     it('should return false for videos', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'meme.mp4',
         data: Bytes.fromString('mp4'),
         contentType: MIME.VIDEO_MP4,
-      };
+      });
       assert.isFalse(Attachment.isFile(attachment));
     });
 
     it('should return false for voice message attachment', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'Voice Message.aac',
         flags: SignalService.AttachmentPointer.Flags.VOICE_MESSAGE,
         data: Bytes.fromString('voice message'),
         contentType: MIME.AUDIO_AAC,
-      };
+      });
       assert.isFalse(Attachment.isFile(attachment));
     });
   });
 
   describe('isVoiceMessage', () => {
     it('should return true for voice message attachment', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'Voice Message.aac',
         flags: SignalService.AttachmentPointer.Flags.VOICE_MESSAGE,
         data: Bytes.fromString('voice message'),
         contentType: MIME.AUDIO_AAC,
-      };
+      });
       assert.isTrue(Attachment.isVoiceMessage(attachment));
     });
 
     it('should return true for legacy Android voice message attachment', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         data: Bytes.fromString('voice message'),
         contentType: MIME.AUDIO_MP3,
-      };
+      });
       assert.isTrue(Attachment.isVoiceMessage(attachment));
     });
 
     it('should return false for other attachments', () => {
-      const attachment: Attachment.AttachmentType = {
+      const attachment: Attachment.AttachmentType = fakeAttachment({
         fileName: 'foo.gif',
         data: Bytes.fromString('foo'),
         contentType: MIME.IMAGE_GIF,
-      };
+      });
       assert.isFalse(Attachment.isVoiceMessage(attachment));
     });
   });

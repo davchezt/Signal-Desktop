@@ -1,23 +1,19 @@
 // Copyright 2020-2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable @typescript-eslint/ban-types */
-/* eslint-disable more/no-then */
-/* eslint-disable class-methods-use-this */
-/* eslint-disable @typescript-eslint/explicit-module-boundary-types */
 import PQueue from 'p-queue';
 import { omit } from 'lodash';
 
 import EventTarget from './EventTarget';
-import type { WebAPIType } from './WebAPI';
+import type { WebAPIType, GroupCredentialType } from './WebAPI';
 import { HTTPError } from './Errors';
-import { KeyPairType, CompatSignedPreKeyType } from './Types.d';
+import type { KeyPairType } from './Types.d';
 import ProvisioningCipher from './ProvisioningCipher';
-import { IncomingWebSocketRequest } from './WebsocketResources';
+import type { IncomingWebSocketRequest } from './WebsocketResources';
 import createTaskWithTimeout from './TaskWithTimeout';
 import * as Bytes from '../Bytes';
 import { RemoveAllConfiguration } from '../types/RemoveAllConfiguration';
+import * as Errors from '../types/errors';
 import { senderCertificateService } from '../services/senderCertificate';
 import {
   deriveAccessKey,
@@ -31,7 +27,7 @@ import {
   generateSignedPreKey,
   generatePreKey,
 } from '../Curve';
-import { UUID } from '../types/UUID';
+import { UUID, UUIDKind } from '../types/UUID';
 import { isMoreRecentThan, isOlderThan } from '../util/timestamp';
 import { ourProfileKeyService } from '../services/ourProfileKey';
 import { assert, strictAssert } from '../util/assert';
@@ -73,6 +69,18 @@ export type GeneratedKeysType = {
   identityKey: Uint8Array;
 };
 
+type CreateAccountOptionsType = Readonly<{
+  number: string;
+  verificationCode: string;
+  aciKeyPair: KeyPairType;
+  pniKeyPair?: KeyPairType;
+  profileKey?: Uint8Array;
+  deviceName?: string;
+  userAgent?: string;
+  readReceipts?: boolean;
+  accessKey?: Uint8Array;
+}>;
+
 export default class AccountManager extends EventTarget {
   pending: Promise<void>;
 
@@ -84,15 +92,15 @@ export default class AccountManager extends EventTarget {
     this.pending = Promise.resolve();
   }
 
-  async requestVoiceVerification(number: string) {
-    return this.server.requestVerificationVoice(number);
+  async requestVoiceVerification(number: string, token: string): Promise<void> {
+    return this.server.requestVerificationVoice(number, token);
   }
 
-  async requestSMSVerification(number: string) {
-    return this.server.requestVerificationSMS(number);
+  async requestSMSVerification(number: string, token: string): Promise<void> {
+    return this.server.requestVerificationSMS(number, token);
   }
 
-  encryptDeviceName(name: string, identityKey: KeyPairType) {
+  encryptDeviceName(name: string, identityKey: KeyPairType): string | null {
     if (!name) {
       return null;
     }
@@ -107,11 +115,10 @@ export default class AccountManager extends EventTarget {
     return Bytes.toBase64(bytes);
   }
 
-  async decryptDeviceName(base64: string) {
+  async decryptDeviceName(base64: string): Promise<string> {
     const ourUuid = window.textsecure.storage.user.getCheckedUuid();
-    const identityKey = await window.textsecure.storage.protocol.getIdentityKeyPair(
-      ourUuid
-    );
+    const identityKey =
+      await window.textsecure.storage.protocol.getIdentityKeyPair(ourUuid);
     if (!identityKey) {
       throw new Error('decryptDeviceName: No identity key pair!');
     }
@@ -128,8 +135,9 @@ export default class AccountManager extends EventTarget {
     return name;
   }
 
-  async maybeUpdateDeviceName() {
-    const isNameEncrypted = window.textsecure.storage.user.getDeviceNameEncrypted();
+  async maybeUpdateDeviceName(): Promise<void> {
+    const isNameEncrypted =
+      window.textsecure.storage.user.getDeviceNameEncrypted();
     if (isNameEncrypted) {
       return;
     }
@@ -149,47 +157,55 @@ export default class AccountManager extends EventTarget {
     }
   }
 
-  async deviceNameIsEncrypted() {
+  async deviceNameIsEncrypted(): Promise<void> {
     await window.textsecure.storage.user.setDeviceNameEncrypted();
   }
 
-  async registerSingleDevice(number: string, verificationCode: string) {
+  async registerSingleDevice(
+    number: string,
+    verificationCode: string
+  ): Promise<void> {
     return this.queueTask(async () => {
-      const identityKeyPair = generateKeyPair();
+      const aciKeyPair = generateKeyPair();
+      const pniKeyPair = generateKeyPair();
       const profileKey = getRandomBytes(PROFILE_KEY_LENGTH);
       const accessKey = deriveAccessKey(profileKey);
 
-      await this.createAccount(
-        number,
-        verificationCode,
-        identityKeyPair,
-        profileKey,
-        null,
-        null,
-        null,
-        { accessKey }
-      );
+      const registrationBaton = this.server.startRegistration();
+      try {
+        await this.createAccount({
+          number,
+          verificationCode,
+          aciKeyPair,
+          pniKeyPair,
+          profileKey,
+          accessKey,
+        });
 
-      await this.clearSessionsAndPreKeys();
-      const keys = await this.generateKeys(SIGNED_KEY_GEN_BATCH_SIZE);
-      await this.server.registerKeys(keys);
-      await this.confirmKeys(keys);
+        await this.clearSessionsAndPreKeys();
+
+        await Promise.all(
+          [UUIDKind.ACI, UUIDKind.PNI].map(async kind => {
+            const keys = await this.generateKeys(
+              SIGNED_KEY_GEN_BATCH_SIZE,
+              kind
+            );
+            await this.server.registerKeys(keys, kind);
+            await this.confirmKeys(keys, kind);
+          })
+        );
+      } finally {
+        this.server.finishRegistration(registrationBaton);
+      }
       await this.registrationDone();
     });
   }
 
   async registerSecondDevice(
-    setProvisioningUrl: Function,
-    confirmNumber: (number?: string) => Promise<string>,
-    progressCallback?: Function
-  ) {
-    const createAccount = this.createAccount.bind(this);
+    setProvisioningUrl: (url: string) => void,
+    confirmNumber: (number?: string) => Promise<string>
+  ): Promise<void> {
     const clearSessionsAndPreKeys = this.clearSessionsAndPreKeys.bind(this);
-    const generateKeys = this.generateKeys.bind(
-      this,
-      SIGNED_KEY_GEN_BATCH_SIZE,
-      progressCallback
-    );
     const provisioningCipher = new ProvisioningCipher();
     const pubKey = await provisioningCipher.getPublicKey();
 
@@ -260,59 +276,86 @@ export default class AccountManager extends EventTarget {
       if (
         !provisionMessage.number ||
         !provisionMessage.provisioningCode ||
-        !provisionMessage.identityKeyPair
+        !provisionMessage.aciKeyPair
       ) {
         throw new Error(
           'AccountManager.registerSecondDevice: Provision message was missing key data'
         );
       }
 
-      await createAccount(
-        provisionMessage.number,
-        provisionMessage.provisioningCode,
-        provisionMessage.identityKeyPair,
-        provisionMessage.profileKey,
-        deviceName,
-        provisionMessage.userAgent,
-        provisionMessage.readReceipts,
-        { uuid: provisionMessage.uuid }
-      );
-      await clearSessionsAndPreKeys();
-      const keys = await generateKeys();
-      await this.server.registerKeys(keys);
-      await this.confirmKeys(keys);
+      const registrationBaton = this.server.startRegistration();
+
+      try {
+        await this.createAccount({
+          number: provisionMessage.number,
+          verificationCode: provisionMessage.provisioningCode,
+          aciKeyPair: provisionMessage.aciKeyPair,
+          pniKeyPair: provisionMessage.pniKeyPair,
+          profileKey: provisionMessage.profileKey,
+          deviceName,
+          userAgent: provisionMessage.userAgent,
+          readReceipts: provisionMessage.readReceipts,
+        });
+        await clearSessionsAndPreKeys();
+
+        const keyKinds = [UUIDKind.ACI];
+        if (provisionMessage.pniKeyPair) {
+          keyKinds.push(UUIDKind.PNI);
+        }
+
+        await Promise.all(
+          keyKinds.map(async kind => {
+            const keys = await this.generateKeys(
+              SIGNED_KEY_GEN_BATCH_SIZE,
+              kind
+            );
+
+            try {
+              await this.server.registerKeys(keys, kind);
+              await this.confirmKeys(keys, kind);
+            } catch (error) {
+              if (kind === UUIDKind.PNI) {
+                log.error(
+                  'Failed to upload PNI prekeys. Moving on',
+                  Errors.toLogFormat(error)
+                );
+                return;
+              }
+
+              throw error;
+            }
+          })
+        );
+      } finally {
+        this.server.finishRegistration(registrationBaton);
+      }
+
       await this.registrationDone();
     });
   }
 
-  async refreshPreKeys() {
-    const generateKeys = this.generateKeys.bind(
-      this,
-      SIGNED_KEY_GEN_BATCH_SIZE
-    );
-    const registerKeys = this.server.registerKeys.bind(this.server);
-
-    return this.queueTask(async () =>
-      this.server.getMyKeys().then(async preKeyCount => {
-        log.info(`prekey count ${preKeyCount}`);
-        if (preKeyCount < 10) {
-          return generateKeys().then(registerKeys);
-        }
-        return null;
-      })
-    );
+  async refreshPreKeys(uuidKind: UUIDKind): Promise<void> {
+    return this.queueTask(async () => {
+      const preKeyCount = await this.server.getMyKeys(uuidKind);
+      log.info(`prekey count ${preKeyCount}`);
+      if (preKeyCount >= 10) {
+        return;
+      }
+      const keys = await this.generateKeys(SIGNED_KEY_GEN_BATCH_SIZE, uuidKind);
+      await this.server.registerKeys(keys, uuidKind);
+    });
   }
 
-  async rotateSignedPreKey() {
+  async rotateSignedPreKey(uuidKind: UUIDKind): Promise<void> {
     return this.queueTask(async () => {
-      const ourUuid = window.textsecure.storage.user.getCheckedUuid();
+      const ourUuid = window.textsecure.storage.user.getCheckedUuid(uuidKind);
       const signedKeyId = window.textsecure.storage.get('signedKeyId', 1);
       if (typeof signedKeyId !== 'number') {
         throw new Error('Invalid signedKeyId');
       }
 
       const store = window.textsecure.storage.protocol;
-      const { server, cleanSignedPreKeys } = this;
+      const { server } = this;
 
       const existingKeys = await store.loadSignedPreKeys(ourUuid);
       existingKeys.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
@@ -321,88 +364,108 @@ export default class AccountManager extends EventTarget {
 
       if (isMoreRecentThan(mostRecent?.created_at || 0, PREKEY_ROTATION_AGE)) {
         log.warn(
-          `rotateSignedPreKey: ${confirmedKeys.length} confirmed keys, most recent was created ${mostRecent?.created_at}. Cancelling rotation.`
+          `rotateSignedPreKey(${uuidKind}): ${confirmedKeys.length} ` +
+            `confirmed keys, most recent was created ${mostRecent?.created_at}. Cancelling rotation.`
         );
         return;
       }
 
-      return store
-        .getIdentityKeyPair(ourUuid)
-        .then(
-          async (identityKey: KeyPairType | undefined) => {
-            if (!identityKey) {
-              throw new Error('rotateSignedPreKey: No identity key pair!');
-            }
+      let identityKey: KeyPairType | undefined;
+      try {
+        identityKey = await store.getIdentityKeyPair(ourUuid);
+      } catch (error) {
+        // We swallow any error here, because we don't want to get into
+        //   a loop of repeated retries.
+        log.error(
+          'Failed to get identity key. Canceling key rotation.',
+          Errors.toLogFormat(error)
+        );
+        return;
+      }
 
-            return generateSignedPreKey(identityKey, signedKeyId);
+      if (!identityKey) {
+        // TODO: DESKTOP-2855
+        if (uuidKind === UUIDKind.PNI) {
+          log.warn(`rotateSignedPreKey(${uuidKind}): No identity key pair!`);
+          return;
+        }
+        throw new Error(
+          `rotateSignedPreKey(${uuidKind}): No identity key pair!`
+        );
+      }
+
+      const res = await generateSignedPreKey(identityKey, signedKeyId);
+
+      log.info(
+        `rotateSignedPreKey(${uuidKind}): Saving new signed prekey`,
+        res.keyId
+      );
+
+      await Promise.all([
+        window.textsecure.storage.put('signedKeyId', signedKeyId + 1),
+        store.storeSignedPreKey(ourUuid, res.keyId, res.keyPair),
+      ]);
+
+      try {
+        await server.setSignedPreKey(
+          {
+            keyId: res.keyId,
+            publicKey: res.keyPair.pubKey,
+            signature: res.signature,
           },
-          () => {
-            // We swallow any error here, because we don't want to get into
-            //   a loop of repeated retries.
-            log.error('Failed to get identity key. Canceling key rotation.');
-            return null;
-          }
-        )
-        .then(async (res: CompatSignedPreKeyType | null) => {
-          if (!res) {
-            return null;
-          }
-          log.info('Saving new signed prekey', res.keyId);
-          return Promise.all([
-            window.textsecure.storage.put('signedKeyId', signedKeyId + 1),
-            store.storeSignedPreKey(ourUuid, res.keyId, res.keyPair),
-            server.setSignedPreKey({
-              keyId: res.keyId,
-              publicKey: res.keyPair.pubKey,
-              signature: res.signature,
-            }),
-          ])
-            .then(async () => {
-              const confirmed = true;
-              log.info('Confirming new signed prekey', res.keyId);
-              return Promise.all([
-                window.textsecure.storage.remove('signedKeyRotationRejected'),
-                store.storeSignedPreKey(
-                  ourUuid,
-                  res.keyId,
-                  res.keyPair,
-                  confirmed
-                ),
-              ]);
-            })
-            .then(cleanSignedPreKeys);
-        })
-        .catch(async (e: Error) => {
-          log.error('rotateSignedPrekey error:', e && e.stack ? e.stack : e);
+          uuidKind
+        );
+      } catch (error) {
+        log.error(
+          `rotateSignedPrekey(${uuidKind}) error:`,
+          Errors.toLogFormat(error)
+        );
 
-          if (
-            e instanceof HTTPError &&
-            e.code &&
-            e.code >= 400 &&
-            e.code <= 599
-          ) {
-            const rejections =
-              1 + window.textsecure.storage.get('signedKeyRotationRejected', 0);
-            await window.textsecure.storage.put(
-              'signedKeyRotationRejected',
-              rejections
-            );
-            log.error('Signed key rotation rejected count:', rejections);
-          } else {
-            throw e;
-          }
-        });
+        if (
+          error instanceof HTTPError &&
+          error.code >= 400 &&
+          error.code <= 599
+        ) {
+          const rejections =
+            1 + window.textsecure.storage.get('signedKeyRotationRejected', 0);
+          await window.textsecure.storage.put(
+            'signedKeyRotationRejected',
+            rejections
+          );
+          log.error(
+            `rotateSignedPreKey(${uuidKind}): Signed key rotation rejected count:`,
+            rejections
+          );
+
+          return;
+        }
+
+        throw error;
+      }
+
+      const confirmed = true;
+      log.info('Confirming new signed prekey', res.keyId);
+      await Promise.all([
+        window.textsecure.storage.remove('signedKeyRotationRejected'),
+        store.storeSignedPreKey(ourUuid, res.keyId, res.keyPair, confirmed),
+      ]);
+
+      try {
+        await this.cleanSignedPreKeys();
+      } catch (_error) {
+        // Ignoring the error
+      }
     });
   }
 
-  async queueTask(task: () => Promise<any>) {
+  async queueTask<T>(task: () => Promise<T>): Promise<T> {
     this.pendingQueue = this.pendingQueue || new PQueue({ concurrency: 1 });
     const taskWithTimeout = createTaskWithTimeout(task, 'AccountManager task');
 
     return this.pendingQueue.add(taskWithTimeout);
   }
 
-  async cleanSignedPreKeys() {
+  async cleanSignedPreKeys(): Promise<void> {
     const ourUuid = window.textsecure.storage.user.getCheckedUuid();
     const store = window.textsecure.storage.protocol;
 
@@ -449,18 +512,18 @@ export default class AccountManager extends EventTarget {
     );
   }
 
-  async createAccount(
-    number: string,
-    verificationCode: string,
-    identityKeyPair: KeyPairType,
-    profileKey: Uint8Array | undefined,
-    deviceName: string | null,
-    userAgent?: string | null,
-    readReceipts?: boolean | null,
-    options: { accessKey?: Uint8Array; uuid?: string } = {}
-  ): Promise<void> {
+  async createAccount({
+    number,
+    verificationCode,
+    aciKeyPair,
+    pniKeyPair,
+    profileKey,
+    deviceName,
+    userAgent,
+    readReceipts,
+    accessKey,
+  }: CreateAccountOptionsType): Promise<void> {
     const { storage } = window.textsecure;
-    const { accessKey, uuid } = options;
     let password = Bytes.toBase64(getRandomBytes(16));
     password = password.substring(0, password.length - 2);
     const registrationId = generateRegistrationId();
@@ -470,7 +533,7 @@ export default class AccountManager extends EventTarget {
 
     let encryptedDeviceName;
     if (deviceName) {
-      encryptedDeviceName = this.encryptDeviceName(deviceName, identityKeyPair);
+      encryptedDeviceName = this.encryptDeviceName(deviceName, aciKeyPair);
       await this.deviceNameIsEncrypted();
     }
 
@@ -486,11 +549,11 @@ export default class AccountManager extends EventTarget {
       password,
       registrationId,
       encryptedDeviceName,
-      { accessKey, uuid }
+      { accessKey }
     );
 
-    const ourUuid = uuid || response.uuid;
-    strictAssert(ourUuid !== undefined, 'Should have UUID after registration');
+    const ourUuid = UUID.cast(response.uuid);
+    const ourPni = UUID.cast(response.pni);
 
     const uuidChanged = previousUuid && ourUuid && previousUuid !== ourUuid;
 
@@ -549,6 +612,7 @@ export default class AccountManager extends EventTarget {
     // information.
     await storage.user.setCredentials({
       uuid: ourUuid,
+      pni: ourPni,
       number,
       deviceId: response.deviceId ?? 1,
       deviceName: deviceName ?? undefined,
@@ -562,32 +626,56 @@ export default class AccountManager extends EventTarget {
       e164: number,
       uuid: ourUuid,
       highTrust: true,
+      reason: 'createAccount',
     });
 
     if (!conversationId) {
       throw new Error('registrationDone: no conversationId!');
     }
 
-    // update our own identity key, which may have changed
-    // if we're relinking after a reinstall on the master device
-    await storage.protocol.saveIdentityWithAttributes(new UUID(ourUuid), {
-      publicKey: identityKeyPair.pubKey,
+    const identityAttrs = {
       firstUse: true,
       timestamp: Date.now(),
       verified: storage.protocol.VerifiedStatus.VERIFIED,
       nonblockingApproval: true,
-    });
+    };
+
+    // update our own identity key, which may have changed
+    // if we're relinking after a reinstall on the master device
+    await Promise.all([
+      storage.protocol.saveIdentityWithAttributes(new UUID(ourUuid), {
+        ...identityAttrs,
+        publicKey: aciKeyPair.pubKey,
+      }),
+      pniKeyPair
+        ? storage.protocol.saveIdentityWithAttributes(new UUID(ourPni), {
+            ...identityAttrs,
+            publicKey: pniKeyPair.pubKey,
+          })
+        : Promise.resolve(),
+    ]);
 
     const identityKeyMap = {
       ...(storage.get('identityKeyMap') || {}),
       [ourUuid]: {
-        pubKey: Bytes.toBase64(identityKeyPair.pubKey),
-        privKey: Bytes.toBase64(identityKeyPair.privKey),
+        pubKey: Bytes.toBase64(aciKeyPair.pubKey),
+        privKey: Bytes.toBase64(aciKeyPair.privKey),
       },
+      ...(pniKeyPair
+        ? {
+            [ourPni]: {
+              pubKey: Bytes.toBase64(pniKeyPair.pubKey),
+              privKey: Bytes.toBase64(pniKeyPair.privKey),
+            },
+          }
+        : {}),
     };
     const registrationIdMap = {
       ...(storage.get('registrationIdMap') || {}),
       [ourUuid]: registrationId,
+
+      // TODO: DESKTOP-3318
+      [ourPni]: registrationId,
     };
 
     await storage.put('identityKeyMap', identityKeyMap);
@@ -601,14 +689,13 @@ export default class AccountManager extends EventTarget {
 
     await storage.put('read-receipt-setting', Boolean(readReceipts));
 
-    const regionCode = window.libphonenumber.util.getRegionCodeForNumber(
-      number
-    );
+    const regionCode =
+      window.libphonenumber.util.getRegionCodeForNumber(number);
     await storage.put('regionCode', regionCode);
     await storage.protocol.hydrateCaches();
   }
 
-  async clearSessionsAndPreKeys() {
+  async clearSessionsAndPreKeys(): Promise<void> {
     const store = window.textsecure.storage.protocol;
 
     log.info('clearing all sessions, prekeys, and signed prekeys');
@@ -619,12 +706,68 @@ export default class AccountManager extends EventTarget {
     ]);
   }
 
-  async getGroupCredentials(startDay: number, endDay: number) {
-    return this.server.getGroupCredentials(startDay, endDay);
+  async updatePNIIdentity(identityKeyPair: KeyPairType): Promise<void> {
+    const { storage } = window.textsecure;
+
+    log.info('AccountManager.updatePNIIdentity: generating new keys');
+
+    return this.queueTask(async () => {
+      const keys = await this.generateKeys(
+        SIGNED_KEY_GEN_BATCH_SIZE,
+        UUIDKind.PNI,
+        identityKeyPair
+      );
+      await this.server.registerKeys(keys, UUIDKind.PNI);
+      await this.confirmKeys(keys, UUIDKind.PNI);
+
+      // Server has accepted our keys which means we have the latest PNI identity
+      // now that doesn't conflict the PNI identity of the primary device.
+      log.info(
+        'AccountManager.updatePNIIdentity: updating identity key ' +
+          'and registration id'
+      );
+      const { pubKey, privKey } = identityKeyPair;
+
+      const pni = storage.user.getCheckedUuid(UUIDKind.PNI);
+      const identityKeyMap = {
+        ...(storage.get('identityKeyMap') || {}),
+        [pni.toString()]: {
+          pubKey: Bytes.toBase64(pubKey),
+          privKey: Bytes.toBase64(privKey),
+        },
+      };
+
+      const aci = storage.user.getCheckedUuid(UUIDKind.ACI);
+      const oldRegistrationIdMap = storage.get('registrationIdMap') || {};
+      const registrationIdMap = {
+        ...oldRegistrationIdMap,
+
+        // TODO: DESKTOP-3318
+        [pni.toString()]: oldRegistrationIdMap[aci.toString()],
+      };
+
+      await Promise.all([
+        storage.put('identityKeyMap', identityKeyMap),
+        storage.put('registrationIdMap', registrationIdMap),
+      ]);
+
+      await storage.protocol.hydrateCaches();
+    });
+  }
+
+  async getGroupCredentials(
+    startDay: number,
+    endDay: number,
+    uuidKind: UUIDKind
+  ): Promise<Array<GroupCredentialType>> {
+    return this.server.getGroupCredentials(startDay, endDay, uuidKind);
   }
 
   // Takes the same object returned by generateKeys
-  async confirmKeys(keys: GeneratedKeysType) {
+  async confirmKeys(
+    keys: GeneratedKeysType,
+    uuidKind: UUIDKind
+  ): Promise<void> {
     const store = window.textsecure.storage.protocol;
     const key = keys.signedPreKey;
     const confirmed = true;
@@ -633,19 +776,24 @@ export default class AccountManager extends EventTarget {
       throw new Error('confirmKeys: signedPreKey is null');
     }
 
-    log.info('confirmKeys: confirming key', key.keyId);
-    const ourUuid = window.textsecure.storage.user.getCheckedUuid();
+    log.info(
+      `AccountManager.confirmKeys(${uuidKind}): confirming key`,
+      key.keyId
+    );
+    const ourUuid = window.textsecure.storage.user.getCheckedUuid(uuidKind);
     await store.storeSignedPreKey(ourUuid, key.keyId, key.keyPair, confirmed);
   }
 
-  async generateKeys(count: number, providedProgressCallback?: Function) {
-    const progressCallback =
-      typeof providedProgressCallback === 'function'
-        ? providedProgressCallback
-        : null;
-    const startId = window.textsecure.storage.get('maxPreKeyId', 1);
-    const signedKeyId = window.textsecure.storage.get('signedKeyId', 1);
-    const ourUuid = window.textsecure.storage.user.getCheckedUuid();
+  async generateKeys(
+    count: number,
+    uuidKind: UUIDKind,
+    maybeIdentityKey?: KeyPairType
+  ): Promise<GeneratedKeysType> {
+    const { storage } = window.textsecure;
+
+    const startId = storage.get('maxPreKeyId', 1);
+    const signedKeyId = storage.get('signedKeyId', 1);
+    const ourUuid = storage.user.getCheckedUuid(uuidKind);
 
     if (typeof startId !== 'number') {
       throw new Error('Invalid maxPreKeyId');
@@ -654,63 +802,58 @@ export default class AccountManager extends EventTarget {
       throw new Error('Invalid signedKeyId');
     }
 
-    const store = window.textsecure.storage.protocol;
-    return store.getIdentityKeyPair(ourUuid).then(async identityKey => {
-      if (!identityKey) {
-        throw new Error('generateKeys: No identity key pair!');
-      }
+    const store = storage.protocol;
+    const identityKey =
+      maybeIdentityKey ?? (await store.getIdentityKeyPair(ourUuid));
+    strictAssert(identityKey, 'generateKeys: No identity key pair!');
 
-      const result: any = {
-        preKeys: [],
-        identityKey: identityKey.pubKey,
+    const result: Omit<GeneratedKeysType, 'signedPreKey'> = {
+      preKeys: [],
+      identityKey: identityKey.pubKey,
+    };
+    const promises = [];
+
+    for (let keyId = startId; keyId < startId + count; keyId += 1) {
+      promises.push(
+        (async () => {
+          const res = generatePreKey(keyId);
+          await store.storePreKey(ourUuid, res.keyId, res.keyPair);
+          result.preKeys.push({
+            keyId: res.keyId,
+            publicKey: res.keyPair.pubKey,
+          });
+        })()
+      );
+    }
+
+    const signedPreKey = (async () => {
+      const res = generateSignedPreKey(identityKey, signedKeyId);
+      await store.storeSignedPreKey(ourUuid, res.keyId, res.keyPair);
+      return {
+        keyId: res.keyId,
+        publicKey: res.keyPair.pubKey,
+        signature: res.signature,
+        // server.registerKeys doesn't use keyPair, confirmKeys does
+        keyPair: res.keyPair,
       };
-      const promises = [];
+    })();
 
-      for (let keyId = startId; keyId < startId + count; keyId += 1) {
-        promises.push(
-          Promise.resolve(generatePreKey(keyId)).then(async res => {
-            await store.storePreKey(ourUuid, res.keyId, res.keyPair);
-            result.preKeys.push({
-              keyId: res.keyId,
-              publicKey: res.keyPair.pubKey,
-            });
-            if (progressCallback) {
-              progressCallback();
-            }
-          })
-        );
-      }
+    promises.push(signedPreKey);
+    promises.push(storage.put('maxPreKeyId', startId + count));
+    promises.push(storage.put('signedKeyId', signedKeyId + 1));
 
-      promises.push(
-        Promise.resolve(generateSignedPreKey(identityKey, signedKeyId)).then(
-          async res => {
-            await store.storeSignedPreKey(ourUuid, res.keyId, res.keyPair);
-            result.signedPreKey = {
-              keyId: res.keyId,
-              publicKey: res.keyPair.pubKey,
-              signature: res.signature,
-              // server.registerKeys doesn't use keyPair, confirmKeys does
-              keyPair: res.keyPair,
-            };
-          }
-        )
-      );
+    await Promise.all(promises);
 
-      promises.push(
-        window.textsecure.storage.put('maxPreKeyId', startId + count)
-      );
-      promises.push(
-        window.textsecure.storage.put('signedKeyId', signedKeyId + 1)
-      );
+    // This is primarily for the signed prekey summary it logs out
+    this.cleanSignedPreKeys();
 
-      return Promise.all(promises).then(async () =>
-        // This is primarily for the signed prekey summary it logs out
-        this.cleanSignedPreKeys().then(() => result as GeneratedKeysType)
-      );
-    });
+    return {
+      ...result,
+      signedPreKey: await signedPreKey,
+    };
   }
 
-  async registrationDone() {
+  async registrationDone(): Promise<void> {
     log.info('registration done');
     this.dispatchEvent(new Event('registration'));
   }

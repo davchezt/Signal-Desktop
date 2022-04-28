@@ -3,11 +3,11 @@
 
 import emojiRegex from 'emoji-regex';
 import Delta from 'quill-delta';
-import { LeafBlot, DeltaOperation } from 'quill';
-import Op from 'quill-delta/dist/Op';
+import type { LeafBlot, DeltaOperation } from 'quill';
+import type Op from 'quill-delta/dist/Op';
 
-import { BodyRangeType } from '../types/Util';
-import { MentionBlot } from './mentions/blot';
+import type { BodyRangeType } from '../types/Util';
+import type { MentionBlot } from './mentions/blot';
 
 export type MentionBlotValue = {
   uuid: string;
@@ -65,9 +65,10 @@ export const getTextAndMentionsFromOps = (
   const mentions: Array<BodyRangeType> = [];
 
   const text = ops
-    .reduce((acc, op) => {
+    .reduce((acc, op, index) => {
       if (typeof op.insert === 'string') {
-        return acc + op.insert;
+        const toAdd = index === 0 ? op.insert.trimStart() : op.insert;
+        return acc + toAdd;
       }
 
       if (isInsertEmojiOp(op)) {
@@ -87,7 +88,7 @@ export const getTextAndMentionsFromOps = (
 
       return acc;
     }, '')
-    .trim();
+    .trimEnd(); // Trimming the start of this string will mess up mention indices
 
   return [text, mentions];
 };

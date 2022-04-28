@@ -1,4 +1,4 @@
-// Copyright 2018-2021 Signal Messenger, LLC
+// Copyright 2018-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import is from '@sindresorhus/is';
@@ -13,17 +13,21 @@ import {
 } from 'lodash';
 import { blobToArrayBuffer } from 'blob-util';
 
-import { LoggerType } from './Logging';
+import type { LoggerType } from './Logging';
 import * as MIME from './MIME';
+import * as log from '../logging/log';
 import { toLogFormat } from './errors';
 import { SignalService } from '../protobuf';
 import {
   isImageTypeSupported,
   isVideoTypeSupported,
 } from '../util/GoogleChrome';
-import { LocalizerType, ThemeType } from './Util';
+import type { LocalizerType } from './Util';
+import { ThemeType } from './Util';
 import * as GoogleChrome from '../util/GoogleChrome';
 import { scaleImageToLevel } from '../util/scaleImageToLevel';
+import { parseIntOrThrow } from '../util/parseIntOrThrow';
+import { getValue } from '../RemoteConfig';
 
 const MAX_WIDTH = 300;
 const MAX_HEIGHT = MAX_WIDTH * 1.5;
@@ -42,7 +46,7 @@ export type AttachmentType = {
   isVoiceMessage?: boolean;
   /** For messages not already on disk, this will be a data url */
   url?: string;
-  size?: number;
+  size: number;
   fileSize?: string;
   pending?: boolean;
   width?: number;
@@ -65,9 +69,36 @@ export type AttachmentType = {
   cdnId?: string;
   cdnKey?: string;
   data?: Uint8Array;
+  textAttachment?: TextAttachmentType;
 
   /** Legacy field. Used only for downloading old attachments */
   id?: number;
+};
+
+export enum TextAttachmentStyleType {
+  DEFAULT = 0,
+  REGULAR = 1,
+  BOLD = 2,
+  SERIF = 3,
+  SCRIPT = 4,
+  CONDENSED = 5,
+}
+
+export type TextAttachmentType = {
+  text?: string | null;
+  textStyle?: number | null;
+  textForegroundColor?: number | null;
+  textBackgroundColor?: number | null;
+  preview?: {
+    url?: string | null;
+    title?: string | null;
+  } | null;
+  gradient?: {
+    startColor?: number | null;
+    endColor?: number | null;
+    angle?: number | null;
+  } | null;
+  color?: number | null;
 };
 
 export type DownloadedAttachmentType = AttachmentType & {
@@ -77,38 +108,50 @@ export type DownloadedAttachmentType = AttachmentType & {
 export type BaseAttachmentDraftType = {
   blurHash?: string;
   contentType: MIME.MIMEType;
-  fileName: string;
-  path: string;
   screenshotContentType?: string;
   screenshotSize?: number;
   size: number;
+  flags?: number;
 };
 
+// An ephemeral attachment type, used between user's request to add the attachment as
+//   a draft and final save on disk and in conversation.draftAttachments.
 export type InMemoryAttachmentDraftType =
   | ({
-      data?: Uint8Array;
+      data: Uint8Array;
       pending: false;
       screenshotData?: Uint8Array;
+      fileName?: string;
+      path?: string;
     } & BaseAttachmentDraftType)
   | {
       contentType: MIME.MIMEType;
-      fileName: string;
-      path: string;
+      fileName?: string;
+      path?: string;
       pending: true;
+      size: number;
     };
 
+// What's stored in conversation.draftAttachments
 export type AttachmentDraftType =
   | ({
-      url: string;
+      url?: string;
       screenshotPath?: string;
-      caption?: string;
       pending: false;
+      // Old draft attachments may have a caption, though they are no longer editable
+      //   because we removed the caption editor.
+      caption?: string;
+      fileName?: string;
+      path: string;
+      width?: number;
+      height?: number;
     } & BaseAttachmentDraftType)
   | {
       contentType: MIME.MIMEType;
-      fileName: string;
-      path: string;
+      fileName?: string;
+      path?: string;
       pending: true;
+      size: number;
     };
 
 export type ThumbnailType = {
@@ -215,7 +258,7 @@ export async function autoOrientJPEG(
   // All images go through handleImageAttachment before being sent and thus have
   // already been scaled to level, oriented, stripped of exif data, and saved
   // in high quality format. If we want to send the image in HQ we can return
-  // the attachement as-is. Otherwise we'll have to further scale it down.
+  // the attachment as-is. Otherwise we'll have to further scale it down.
   if (!attachment.data || sendHQImages) {
     return attachment;
   }
@@ -310,7 +353,7 @@ export function removeSchemaVersion({
   attachment: AttachmentType;
   logger: LoggerType;
 }): AttachmentType {
-  if (!exports.isValid(attachment)) {
+  if (!isValid(attachment)) {
     logger.error(
       'Attachment.removeSchemaVersion: Invalid input attachment:',
       attachment
@@ -391,10 +434,10 @@ export async function captureDimensionsAndScreenshot(
       contentType: MIME.MIMEType
     ) => string;
     revokeObjectUrl: (path: string) => void;
-    getImageDimensions: (params: {
-      objectUrl: string;
-      logger: LoggerType;
-    }) => { width: number; height: number };
+    getImageDimensions: (params: { objectUrl: string; logger: LoggerType }) => {
+      width: number;
+      height: number;
+    };
     makeImageThumbnail: (params: {
       size: number;
       objectUrl: string;
@@ -609,6 +652,10 @@ export function getUrl(attachment: AttachmentType): string | undefined {
     return attachment.screenshot.url;
   }
 
+  if (isVideoAttachment(attachment)) {
+    return undefined;
+  }
+
   return attachment.url;
 }
 
@@ -621,7 +668,9 @@ export function isImage(attachments?: ReadonlyArray<AttachmentType>): boolean {
   );
 }
 
-export function isImageAttachment(attachment?: AttachmentType): boolean {
+export function isImageAttachment(
+  attachment?: Pick<AttachmentType, 'contentType'>
+): boolean {
   return Boolean(
     attachment &&
       attachment.contentType &&
@@ -630,8 +679,8 @@ export function isImageAttachment(attachment?: AttachmentType): boolean {
 }
 
 export function canBeTranscoded(
-  attachment?: AttachmentType
-): attachment is AttachmentType {
+  attachment?: Pick<AttachmentType, 'contentType'>
+): boolean {
   return Boolean(
     attachment &&
       isImageAttachment(attachment) &&
@@ -676,8 +725,16 @@ export function isGIF(attachments?: ReadonlyArray<AttachmentType>): boolean {
   return hasFlag && isVideoAttachment(attachment);
 }
 
-export function hasNotDownloaded(attachment?: AttachmentType): boolean {
-  return Boolean(attachment && !attachment.url);
+export function isDownloaded(attachment?: AttachmentType): boolean {
+  return Boolean(attachment && (attachment.path || attachment.textAttachment));
+}
+
+export function hasNotResolved(attachment?: AttachmentType): boolean {
+  return Boolean(attachment && !attachment.url && !attachment.textAttachment);
+}
+
+export function isDownloading(attachment?: AttachmentType): boolean {
+  return Boolean(attachment && attachment.downloadJobId && attachment.pending);
 }
 
 export function hasVideoBlurHash(attachments?: Array<AttachmentType>): boolean {
@@ -938,14 +995,21 @@ export const getFileExtension = (
   }
 };
 
-export const getUploadSizeLimitKb = (contentType: MIME.MIMEType): number => {
-  if (MIME.isGif(contentType)) {
-    return 25000;
+const MEBIBYTE = 1024 * 1024;
+const DEFAULT_MAX = 100 * MEBIBYTE;
+
+export const getMaximumAttachmentSize = (): number => {
+  try {
+    return parseIntOrThrow(
+      getValue('global.attachments.maxBytes'),
+      'preProcessAttachment/maxAttachmentSize'
+    );
+  } catch (error) {
+    log.warn(
+      'Failed to parse integer out of global.attachments.maxBytes feature flag'
+    );
+    return DEFAULT_MAX;
   }
-  if (isImageTypeSupported(contentType)) {
-    return 6000;
-  }
-  return 100000;
 };
 
 export const defaultBlurHash = (theme: ThemeType = ThemeType.light): string => {

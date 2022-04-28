@@ -1,7 +1,8 @@
 // Copyright 2020-2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { Ref, useEffect, useState } from 'react';
+import type { Ref } from 'react';
+import { useEffect, useState } from 'react';
 import { first, last, noop } from 'lodash';
 
 function getTop(element: Readonly<Element>): number {
@@ -39,10 +40,7 @@ export function useHasWrapped<T extends HTMLElement>(): [Ref<T>, boolean] {
       return noop;
     }
 
-    // We can remove this `any` when we upgrade to TypeScript 4.2+, which adds
-    //   `ResizeObserver` type definitions.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const observer = new (window as any).ResizeObserver(() => {
+    const observer = new ResizeObserver(() => {
       setHasWrapped(isWrapped(element));
     });
     observer.observe(element);

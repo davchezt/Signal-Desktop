@@ -1,8 +1,7 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 /* eslint-disable guard-for-in */
-/* eslint-disable class-methods-use-this */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable more/no-then */
 /* eslint-disable no-param-reassign */
@@ -10,19 +9,21 @@
 import { reject } from 'lodash';
 
 import { z } from 'zod';
-import {
-  CiphertextMessageType,
+import type {
   CiphertextMessage,
   PlaintextContent,
+} from '@signalapp/libsignal-client';
+import {
+  CiphertextMessageType,
   ProtocolAddress,
   sealedSenderEncrypt,
   SenderCertificate,
   signalEncrypt,
   UnidentifiedSenderMessageContent,
-} from '@signalapp/signal-client';
+} from '@signalapp/libsignal-client';
 
 import type { WebAPIType, MessageType } from './WebAPI';
-import { SendMetadataType, SendOptionsType } from './SendMessage';
+import type { SendMetadataType, SendOptionsType } from './SendMessage';
 import {
   OutgoingIdentityKeyError,
   OutgoingMessageError,
@@ -31,11 +32,11 @@ import {
   UnregisteredUserError,
   HTTPError,
 } from './Errors';
-import { CallbackResultType, CustomError } from './Types.d';
+import type { CallbackResultType, CustomError } from './Types.d';
 import { isValidNumber } from '../types/PhoneNumber';
 import { Address } from '../types/Address';
 import { QualifiedAddress } from '../types/QualifiedAddress';
-import { UUID } from '../types/UUID';
+import { UUID, isValidUuid } from '../types/UUID';
 import { Sessions, IdentityKeys } from '../LibSignalStores';
 import { updateConversationsWithUuidLookup } from '../updateConversationsWithUuidLookup';
 import { getKeysForIdentifier } from './getKeysForIdentifier';
@@ -52,12 +53,10 @@ export type SendLogCallbackType = (options: {
   deviceIds: Array<number>;
 }) => Promise<void>;
 
-export const serializedCertificateSchema = z
-  .object({
-    expires: z.number().optional(),
-    serialized: z.instanceof(Uint8Array),
-  })
-  .nonstrict();
+export const serializedCertificateSchema = z.object({
+  expires: z.number().optional(),
+  serialized: z.instanceof(Uint8Array),
+});
 
 export type SerializedCertificateType = z.infer<
   typeof serializedCertificateSchema
@@ -190,8 +189,16 @@ export default class OutgoingMessage {
   numberCompleted(): void {
     this.identifiersCompleted += 1;
     if (this.identifiersCompleted >= this.identifiers.length) {
+      const proto = this.message;
       const contentProto = this.getContentProtoBytes();
       const { timestamp, contentHint, recipients } = this;
+      let dataMessage: Uint8Array | undefined;
+
+      if (proto instanceof Proto.Content && proto.dataMessage) {
+        dataMessage = Proto.DataMessage.encode(proto.dataMessage).finish();
+      } else if (proto instanceof Proto.DataMessage) {
+        dataMessage = Proto.DataMessage.encode(proto).finish();
+      }
 
       this.callback({
         successfulIdentifiers: this.successfulIdentifiers,
@@ -200,6 +207,7 @@ export default class OutgoingMessage {
         unidentifiedDeliveries: this.unidentifiedDeliveries,
 
         contentHint,
+        dataMessage,
         recipients,
         contentProto,
         timestamp,
@@ -425,11 +433,12 @@ export default class OutgoingMessage {
             );
             if (!activeSession) {
               throw new Error(
-                'OutgoingMessage.doSendMessage: No active sesssion!'
+                'OutgoingMessage.doSendMessage: No active session!'
               );
             }
 
-            const destinationRegistrationId = activeSession.remoteRegistrationId();
+            const destinationRegistrationId =
+              activeSession.remoteRegistrationId();
 
             if (sealedSender && senderCertificate) {
               const ciphertextMessage = await this.getCiphertextMessage({
@@ -654,7 +663,7 @@ export default class OutgoingMessage {
   async sendToIdentifier(providedIdentifier: string): Promise<void> {
     let identifier = providedIdentifier;
     try {
-      if (window.isValidGuid(identifier)) {
+      if (isValidUuid(identifier)) {
         // We're good!
       } else if (isValidNumber(identifier)) {
         if (!window.textsecure.messaging) {
@@ -672,9 +681,8 @@ export default class OutgoingMessage {
             messaging: window.textsecure.messaging,
           });
 
-          const uuid = window.ConversationController.get(identifier)?.get(
-            'uuid'
-          );
+          const uuid =
+            window.ConversationController.get(identifier)?.get('uuid');
           if (!uuid) {
             throw new UnregisteredUserError(
               identifier,
@@ -708,12 +716,7 @@ export default class OutgoingMessage {
       await this.reloadDevicesAndSend(identifier, true)();
     } catch (error) {
       if (error?.message?.includes('untrusted identity for address')) {
-        const newError = new OutgoingIdentityKeyError(
-          identifier,
-          error.originalMessage,
-          error.timestamp,
-          error.identityKey && new Uint8Array(error.identityKey)
-        );
+        const newError = new OutgoingIdentityKeyError(identifier);
         this.registerError(identifier, 'Untrusted identity', newError);
       } else {
         this.registerError(

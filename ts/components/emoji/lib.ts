@@ -1,4 +1,4 @@
-// Copyright 2019-2021 Signal Messenger, LLC
+// Copyright 2019-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Camelcase disabled due to emoji-datasource using snake_case
@@ -26,7 +26,13 @@ import * as log from '../../logging/log';
 export const skinTones = ['1F3FB', '1F3FC', '1F3FD', '1F3FE', '1F3FF'];
 
 export type SkinToneKey = '1F3FB' | '1F3FC' | '1F3FD' | '1F3FE' | '1F3FF';
-export type SizeClassType = '' | 'small' | 'medium' | 'large' | 'jumbo';
+export type SizeClassType =
+  | ''
+  | 'small'
+  | 'medium'
+  | 'large'
+  | 'extra-large'
+  | 'max';
 
 export type EmojiSkinVariation = {
   unified: string;
@@ -94,7 +100,11 @@ const makeImagePath = (src: string) => {
   return `${ROOT_PATH}node_modules/emoji-datasource-apple/img/apple/64/${src}`;
 };
 
-const imageQueue = new PQueue({ concurrency: 10, timeout: 1000 * 60 * 2 });
+const imageQueue = new PQueue({
+  concurrency: 10,
+  timeout: 1000 * 60 * 2,
+  throwOnTimeout: true,
+});
 const images = new Set();
 
 export const preloadImages = async (): Promise<void> => {
@@ -210,15 +220,12 @@ export function getImagePath(
 const fuse = new Fuse(data, {
   shouldSort: true,
   threshold: 0.2,
-  maxPatternLength: 32,
   minMatchCharLength: 1,
-  tokenize: true,
-  tokenSeparator: /[-_\s]+/,
   keys: ['short_name', 'name'],
 });
 
 export function search(query: string, count = 0): Array<EmojiData> {
-  const results = fuse.search(query.substr(0, 32));
+  const results = fuse.search(query.substr(0, 32)).map(result => result.item);
 
   if (count) {
     return take(results, count);
@@ -315,19 +322,22 @@ export function getSizeClass(str: string): SizeClassType {
 
   const emojiCount = getEmojiCount(str);
 
-  if (emojiCount > 8) {
-    return '';
+  if (emojiCount === 1) {
+    return 'max';
   }
-  if (emojiCount > 6) {
-    return 'small';
+  if (emojiCount === 2) {
+    return 'extra-large';
   }
-  if (emojiCount > 4) {
-    return 'medium';
-  }
-  if (emojiCount > 2) {
+  if (emojiCount === 3) {
     return 'large';
   }
-  return 'jumbo';
+  if (emojiCount === 4) {
+    return 'medium';
+  }
+  if (emojiCount === 5) {
+    return 'small';
+  }
+  return '';
 }
 
 data.forEach(emoji => {
@@ -344,9 +354,8 @@ data.forEach(emoji => {
 
   if (skin_variations) {
     Object.entries(skin_variations).forEach(([tone, variation]) => {
-      imageByEmoji[
-        convertShortName(short_name, tone as SkinToneKey)
-      ] = makeImagePath(variation.image);
+      imageByEmoji[convertShortName(short_name, tone as SkinToneKey)] =
+        makeImagePath(variation.image);
       dataByEmoji[convertShortName(short_name, tone as SkinToneKey)] = emoji;
     });
   }

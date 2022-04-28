@@ -1,20 +1,29 @@
 // Copyright 2014-2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import * as Backbone from 'backbone';
 import * as log from '../logging/log';
-import { ConversationModel } from '../models/conversations';
+import type { ConversationModel } from '../models/conversations';
 import { showToast } from '../util/showToast';
+import { strictAssert } from '../util/assert';
 import { ToastStickerPackInstallFailed } from '../components/ToastStickerPackInstallFailed';
 
 window.Whisper = window.Whisper || {};
 const { Whisper } = window;
 
-const ConversationStack = Whisper.View.extend({
-  className: 'conversation-stack',
-  lastConversation: null,
-  open(conversation: ConversationModel, messageId: string) {
-    const id = `conversation-${conversation.cid}`;
-    if (id !== this.el.lastChild.id) {
+class ConversationStack extends Backbone.View {
+  public override className = 'conversation-stack';
+
+  private conversationStack: Array<ConversationModel> = [];
+
+  private getTopConversation(): undefined | ConversationModel {
+    return this.conversationStack[this.conversationStack.length - 1];
+  }
+
+  public open(conversation: ConversationModel, messageId: string): void {
+    const topConversation = this.getTopConversation();
+
+    if (!topConversation || topConversation.id !== conversation.id) {
       const view = new Whisper.ConversationView({
         model: conversation,
       });
@@ -24,36 +33,43 @@ const ConversationStack = Whisper.View.extend({
       );
       view.$el.appendTo(this.el);
 
-      if (this.lastConversation && this.lastConversation !== conversation) {
-        this.lastConversation.trigger('unload', 'opened another conversation');
-        this.stopListening(this.lastConversation);
-        this.lastConversation = null;
+      if (topConversation) {
+        topConversation.trigger('unload', 'opened another conversation');
       }
 
-      this.lastConversation = conversation;
+      this.conversationStack.push(conversation);
+
       conversation.trigger('opened', messageId);
     } else if (messageId) {
       conversation.trigger('scroll-to-message', messageId);
     }
 
+    this.render();
+  }
+
+  public unload(): void {
+    this.getTopConversation()?.trigger('unload', 'force unload requested');
+  }
+
+  private onUnload(conversation: ConversationModel) {
+    this.stopListening(conversation);
+    this.conversationStack = this.conversationStack.filter(
+      (c: ConversationModel) => c !== conversation
+    );
+
+    this.render();
+  }
+
+  public override render(): ConversationStack {
+    const isAnyConversationOpen = Boolean(this.conversationStack.length);
+    this.$('.no-conversation-open').toggle(!isAnyConversationOpen);
+
     // Make sure poppers are positioned properly
     window.dispatchEvent(new Event('resize'));
-  },
-  unload() {
-    const { lastConversation } = this;
-    if (!lastConversation) {
-      return;
-    }
 
-    lastConversation.trigger('unload', 'force unload requested');
-  },
-  onUnload(conversation: ConversationModel) {
-    if (this.lastConversation === conversation) {
-      this.stopListening(this.lastConversation);
-      this.lastConversation = null;
-    }
-  },
-});
+    return this;
+  }
+}
 
 const AppLoadingScreen = Whisper.View.extend({
   template: () => $('#app-loading-screen').html(),
@@ -71,7 +87,7 @@ const AppLoadingScreen = Whisper.View.extend({
 
 Whisper.InboxView = Whisper.View.extend({
   template: () => $('#two-column').html(),
-  className: 'inbox index',
+  className: 'Inbox',
   initialize(
     options: {
       initialLoadComplete?: boolean;
@@ -83,7 +99,6 @@ Whisper.InboxView = Whisper.View.extend({
 
     this.conversation_stack = new ConversationStack({
       el: this.$('.conversation-stack'),
-      model: { window: options.window },
     });
 
     this.renderWhatsNew();
@@ -101,11 +116,9 @@ Whisper.InboxView = Whisper.View.extend({
       this.conversation_stack.unload();
     });
 
-    window.Whisper.events.on('showConversation', async (id, messageId) => {
-      const conversation = await window.ConversationController.getOrCreateAndWait(
-        id,
-        'private'
-      );
+    window.Whisper.events.on('showConversation', (id, messageId) => {
+      const conversation = window.ConversationController.get(id);
+      strictAssert(conversation, 'Conversation must be found');
 
       conversation.setMarkedUnread(false);
 
@@ -115,14 +128,6 @@ Whisper.InboxView = Whisper.View.extend({
       }
 
       this.conversation_stack.open(conversation, messageId);
-      this.focusConversation();
-    });
-
-    window.Whisper.events.on('showSafetyNumberInConversation', id => {
-      const conversation = window.ConversationController.get(id);
-      if (conversation) {
-        conversation.trigger('showSafetyNumber');
-      }
     });
 
     window.Whisper.events.on('loadingProgress', count => {
@@ -154,16 +159,18 @@ Whisper.InboxView = Whisper.View.extend({
     click: 'onClick',
   },
   renderWhatsNew() {
-    if (this.whatsNewView) {
+    if (this.whatsNewLink) {
       return;
     }
-    this.whatsNewView = new Whisper.ReactWrapperView({
-      Component: window.Signal.Components.WhatsNew,
+    const { showWhatsNewModal } = window.reduxActions.globalModals;
+    this.whatsNewLink = new Whisper.ReactWrapperView({
+      Component: window.Signal.Components.WhatsNewLink,
       props: {
         i18n: window.i18n,
+        showWhatsNewModal,
       },
     });
-    this.$('.whats-new-placeholder').append(this.whatsNewView.el);
+    this.$('.whats-new-placeholder').append(this.whatsNewLink.el);
   },
   setupLeftPane() {
     if (this.leftPaneView) {
@@ -174,7 +181,7 @@ Whisper.InboxView = Whisper.View.extend({
       JSX: window.Signal.State.Roots.createLeftPane(window.reduxStore),
     });
 
-    this.$('.left-pane-placeholder').append(this.leftPaneView.el);
+    this.$('.left-pane-placeholder').replaceWith(this.leftPaneView.el);
   },
   startConnectionListener() {
     this.interval = setInterval(() => {
@@ -212,26 +219,9 @@ Whisper.InboxView = Whisper.View.extend({
       view.remove();
 
       const searchInput = document.querySelector(
-        '.module-main-header__search__input'
+        '.LeftPaneSearchInput__input'
       ) as HTMLElement;
       searchInput?.focus?.();
     }
-  },
-  focusConversation(e: MouseEvent) {
-    if (e && this.$(e.target).closest('.placeholder').length) {
-      return;
-    }
-
-    this.$('#header, .gutter').addClass('inactive');
-    this.$('.conversation-stack').removeClass('inactive');
-  },
-  closeRecording(e: MouseEvent) {
-    if (e && this.$(e.target).closest('.capture-audio').length > 0) {
-      return;
-    }
-    this.$('.conversation:first .recorder').trigger('close');
-  },
-  onClick(e: MouseEvent) {
-    this.closeRecording(e);
   },
 });

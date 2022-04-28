@@ -1,29 +1,34 @@
-// Copyright 2018-2021 Signal Messenger, LLC
+// Copyright 2018-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import React, { ReactChild, ReactNode } from 'react';
+import type { ReactChild, ReactNode } from 'react';
+import React from 'react';
 import classNames from 'classnames';
-import moment from 'moment';
 import { noop } from 'lodash';
 
 import { Avatar, AvatarSize } from '../Avatar';
 import { ContactName } from './ContactName';
-import {
-  Message,
+import { Time } from '../Time';
+import type {
   Props as MessagePropsType,
   PropsData as MessagePropsDataType,
 } from './Message';
-import { LocalizerType } from '../../types/Util';
-import { ConversationType } from '../../state/ducks/conversations';
+import { Message } from './Message';
+import type { LocalizerType, ThemeType } from '../../types/Util';
+import type { ConversationType } from '../../state/ducks/conversations';
+import type { PreferredBadgeSelectorType } from '../../state/selectors/badges';
 import { groupBy } from '../../util/mapUtil';
-import { ContactNameColorType } from '../../types/Colors';
+import type { ContactNameColorType } from '../../types/Colors';
 import { SendStatus } from '../../messages/MessageSendState';
+import { WidthBreakpoint } from '../_util';
 import * as log from '../../logging/log';
+import { formatDateTimeLong } from '../../util/timestamp';
 
 export type Contact = Pick<
   ConversationType,
   | 'acceptedMessageRequest'
   | 'avatarPath'
+  | 'badges'
   | 'color'
   | 'id'
   | 'isMe'
@@ -35,6 +40,7 @@ export type Contact = Pick<
   | 'unblurredAvatarPath'
 > & {
   status?: SendStatus;
+  statusTimestamp?: number;
 
   isOutgoingKeyError: boolean;
   isUnidentifiedDelivery: boolean;
@@ -56,7 +62,9 @@ export type PropsData = {
 
   showSafetyNumber: (contactId: string) => void;
   i18n: LocalizerType;
-} & Pick<MessagePropsType, 'interactionMode'>;
+  theme: ThemeType;
+  getPreferredBadge: PreferredBadgeSelectorType;
+} & Pick<MessagePropsType, 'getPreferredBadge' | 'interactionMode'>;
 
 export type PropsBackboneActions = Pick<
   MessagePropsType,
@@ -71,6 +79,7 @@ export type PropsBackboneActions = Pick<
   | 'renderEmojiPicker'
   | 'renderReactionPicker'
   | 'replyToMessage'
+  | 'retryDeleteForEveryone'
   | 'retrySend'
   | 'showContactDetail'
   | 'showContactModal'
@@ -78,6 +87,7 @@ export type PropsBackboneActions = Pick<
   | 'showExpiredOutgoingTapToViewToast'
   | 'showForwardMessageModal'
   | 'showVisualAttachment'
+  | 'startConversation'
 >;
 
 export type PropsReduxActions = Pick<
@@ -98,10 +108,9 @@ const _keyForError = (error: Error): string => {
 
 export class MessageDetail extends React.Component<Props> {
   private readonly focusRef = React.createRef<HTMLDivElement>();
-
   private readonly messageContainerRef = React.createRef<HTMLDivElement>();
 
-  public componentDidMount(): void {
+  public override componentDidMount(): void {
     // When this component is created, it's initially not part of the DOM, and then it's
     //   added off-screen and animated in. This ensures that the focus takes.
     setTimeout(() => {
@@ -112,10 +121,11 @@ export class MessageDetail extends React.Component<Props> {
   }
 
   public renderAvatar(contact: Contact): JSX.Element {
-    const { i18n } = this.props;
+    const { getPreferredBadge, i18n, theme } = this.props;
     const {
       acceptedMessageRequest,
       avatarPath,
+      badges,
       color,
       isMe,
       name,
@@ -130,6 +140,7 @@ export class MessageDetail extends React.Component<Props> {
       <Avatar
         acceptedMessageRequest={acceptedMessageRequest}
         avatarPath={avatarPath}
+        badge={getPreferredBadge(badges)}
         color={color}
         conversationType="direct"
         i18n={i18n}
@@ -137,6 +148,7 @@ export class MessageDetail extends React.Component<Props> {
         name={name}
         phoneNumber={phoneNumber}
         profileName={profileName}
+        theme={theme}
         title={title}
         sharedGroupNames={sharedGroupNames}
         size={AvatarSize.THIRTY_SIX}
@@ -182,6 +194,14 @@ export class MessageDetail extends React.Component<Props> {
         </div>
         {errorComponent}
         {unidentifiedDeliveryComponent}
+        {contact.statusTimestamp && (
+          <Time
+            className="module-message-detail__status-timestamp"
+            timestamp={contact.statusTimestamp}
+          >
+            {formatDateTimeLong(i18n, contact.statusTimestamp)}
+          </Time>
+        )}
       </div>
     );
   }
@@ -245,7 +265,7 @@ export class MessageDetail extends React.Component<Props> {
     );
   }
 
-  public render(): JSX.Element {
+  public override render(): JSX.Element {
     const {
       errors,
       message,
@@ -257,6 +277,7 @@ export class MessageDetail extends React.Component<Props> {
       contactNameColor,
       displayTapToViewMessage,
       doubleCheckMissingQuoteReference,
+      getPreferredBadge,
       i18n,
       interactionMode,
       kickOffAttachmentDownload,
@@ -269,6 +290,7 @@ export class MessageDetail extends React.Component<Props> {
       renderEmojiPicker,
       renderReactionPicker,
       replyToMessage,
+      retryDeleteForEveryone,
       retrySend,
       showContactDetail,
       showContactModal,
@@ -276,6 +298,8 @@ export class MessageDetail extends React.Component<Props> {
       showExpiredOutgoingTapToViewToast,
       showForwardMessageModal,
       showVisualAttachment,
+      startConversation,
+      theme,
     } = this.props;
 
     return (
@@ -292,6 +316,7 @@ export class MessageDetail extends React.Component<Props> {
             clearSelectedMessage={clearSelectedMessage}
             contactNameColor={contactNameColor}
             containerElementRef={this.messageContainerRef}
+            containerWidthBreakpoint={WidthBreakpoint.Wide}
             deleteMessage={() =>
               log.warn('MessageDetail: deleteMessage called!')
             }
@@ -300,17 +325,19 @@ export class MessageDetail extends React.Component<Props> {
             }
             disableMenu
             disableScroll
+            displayLimit={Number.MAX_SAFE_INTEGER}
             displayTapToViewMessage={displayTapToViewMessage}
             downloadAttachment={() =>
               log.warn('MessageDetail: deleteMessageForEveryone called!')
             }
             doubleCheckMissingQuoteReference={doubleCheckMissingQuoteReference}
+            getPreferredBadge={getPreferredBadge}
             i18n={i18n}
             interactionMode={interactionMode}
             kickOffAttachmentDownload={kickOffAttachmentDownload}
             markAttachmentAsCorrupted={markAttachmentAsCorrupted}
             markViewed={markViewed}
-            onHeightChange={noop}
+            messageExpanded={noop}
             openConversation={openConversation}
             openLink={openLink}
             reactToMessage={reactToMessage}
@@ -318,7 +345,11 @@ export class MessageDetail extends React.Component<Props> {
             renderEmojiPicker={renderEmojiPicker}
             renderReactionPicker={renderReactionPicker}
             replyToMessage={replyToMessage}
+            retryDeleteForEveryone={retryDeleteForEveryone}
             retrySend={retrySend}
+            shouldCollapseAbove={false}
+            shouldCollapseBelow={false}
+            shouldHideMetadata={false}
             showForwardMessageModal={showForwardMessageModal}
             scrollToQuotedMessage={() => {
               log.warn('MessageDetail: scrollToQuotedMessage called!');
@@ -335,6 +366,8 @@ export class MessageDetail extends React.Component<Props> {
               log.warn('MessageDetail: deleteMessageForEveryone called!');
             }}
             showVisualAttachment={showVisualAttachment}
+            startConversation={startConversation}
+            theme={theme}
           />
         </div>
         <table className="module-message-detail__info">
@@ -353,19 +386,23 @@ export class MessageDetail extends React.Component<Props> {
             <tr>
               <td className="module-message-detail__label">{i18n('sent')}</td>
               <td>
-                {moment(sentAt).format('LLLL')}{' '}
+                <Time timestamp={sentAt}>
+                  {formatDateTimeLong(i18n, sentAt)}
+                </Time>{' '}
                 <span className="module-message-detail__unix-timestamp">
                   ({sentAt})
                 </span>
               </td>
             </tr>
-            {receivedAt ? (
+            {receivedAt && message.direction === 'incoming' ? (
               <tr>
                 <td className="module-message-detail__label">
                   {i18n('received')}
                 </td>
                 <td>
-                  {moment(receivedAt).format('LLLL')}{' '}
+                  <Time timestamp={receivedAt}>
+                    {formatDateTimeLong(i18n, receivedAt)}
+                  </Time>{' '}
                   <span className="module-message-detail__unix-timestamp">
                     ({receivedAt})
                   </span>

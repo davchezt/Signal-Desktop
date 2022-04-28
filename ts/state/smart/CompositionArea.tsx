@@ -4,13 +4,15 @@
 import { connect } from 'react-redux';
 import { get } from 'lodash';
 import { mapDispatchToProps } from '../actions';
+import type { Props as ComponentPropsType } from '../../components/CompositionArea';
 import { CompositionArea } from '../../components/CompositionArea';
-import { StateType } from '../reducer';
+import type { StateType } from '../reducer';
 import { isConversationSMSOnly } from '../../util/isConversationSMSOnly';
 import { dropNull } from '../../util/dropNull';
 
+import { getPreferredBadgeSelector } from '../selectors/badges';
 import { selectRecentEmojis } from '../selectors/emojis';
-import { getIntl, getUserConversationId } from '../selectors/user';
+import { getIntl, getTheme, getUserConversationId } from '../selectors/user';
 import { getEmojiSkinTone } from '../selectors/items';
 import {
   getConversationSelector,
@@ -29,11 +31,13 @@ import {
 
 type ExternalProps = {
   id: string;
-  onClickQuotedMessage: (id: string) => unknown;
+  handleClickQuotedMessage: (id: string) => unknown;
 };
 
+export type CompositionAreaPropsType = ExternalProps & ComponentPropsType;
+
 const mapStateToProps = (state: StateType, props: ExternalProps) => {
-  const { id, onClickQuotedMessage } = props;
+  const { id, handleClickQuotedMessage } = props;
 
   const conversationSelector = getConversationSelector(state);
   const conversation = conversationSelector(id);
@@ -41,12 +45,8 @@ const mapStateToProps = (state: StateType, props: ExternalProps) => {
     throw new Error(`Conversation id ${id} not found!`);
   }
 
-  const {
-    announcementsOnly,
-    areWeAdmin,
-    draftText,
-    draftBodyRanges,
-  } = conversation;
+  const { announcementsOnly, areWeAdmin, draftText, draftBodyRanges } =
+    conversation;
 
   const receivedPacks = getReceivedStickerPacks(state);
   const installedPacks = getInstalledStickerPacks(state);
@@ -80,6 +80,12 @@ const mapStateToProps = (state: StateType, props: ExternalProps) => {
     // Base
     conversationId: id,
     i18n: getIntl(state),
+    theme: getTheme(state),
+    getPreferredBadge: getPreferredBadgeSelector(state),
+    // AudioCapture
+    errorDialogAudioRecorderType:
+      state.audioRecorder.errorDialogAudioRecorderType,
+    recordingState: state.audioRecorder.recordingState,
     // AttachmentsList
     draftAttachments,
     // MediaQualitySelector
@@ -97,7 +103,7 @@ const mapStateToProps = (state: StateType, props: ExternalProps) => {
     onClickQuotedMessage: () => {
       const messageId = quotedMessage?.quote?.messageId;
       if (messageId) {
-        onClickQuotedMessage(messageId);
+        handleClickQuotedMessage(messageId);
       }
     },
     // Emojis
@@ -117,9 +123,8 @@ const mapStateToProps = (state: StateType, props: ExternalProps) => {
     conversationType: conversation.type,
     isSMSOnly: Boolean(isConversationSMSOnly(conversation)),
     isFetchingUUID: conversation.isFetchingUUID,
-    isMissingMandatoryProfileSharing: isMissingRequiredProfileSharing(
-      conversation
-    ),
+    isMissingMandatoryProfileSharing:
+      isMissingRequiredProfileSharing(conversation),
     // Groups
     announcementsOnly,
     areWeAdmin,

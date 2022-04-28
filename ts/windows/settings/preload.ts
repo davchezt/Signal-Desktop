@@ -5,10 +5,7 @@ import React from 'react';
 import ReactDOM from 'react-dom';
 import { contextBridge, ipcRenderer } from 'electron';
 
-// It is important to call this as early as possible
-import '../context';
-
-import { SignalWindow } from '../configure';
+import { SignalContext } from '../context';
 import * as Settings from '../../types/Settings';
 import { Preferences } from '../../components/Preferences';
 import {
@@ -18,6 +15,7 @@ import {
 } from '../../types/SystemTraySetting';
 import { awaitObject } from '../../util/awaitObject';
 import { createSetting, createCallback } from '../../util/preload';
+import { startInteractionMode } from '../startInteractionMode';
 
 function doneRendering() {
   ipcRenderer.send('settings-done-rendering');
@@ -106,9 +104,7 @@ const ipcSetGlobalDefaultConversationColor = createCallback(
 
 const DEFAULT_NOTIFICATION_SETTING = 'message';
 
-function getSystemTraySettingValues(
-  systemTraySetting: SystemTraySetting
-): {
+function getSystemTraySettingValues(systemTraySetting: SystemTraySetting): {
   hasMinimizeToAndStartInSystemTray: boolean;
   hasMinimizeToSystemTray: boolean;
 } {
@@ -127,6 +123,8 @@ function getSystemTraySettingValues(
 }
 
 const renderPreferences = async () => {
+  startInteractionMode();
+
   const {
     blockedCount,
     deviceName,
@@ -202,16 +200,11 @@ const renderPreferences = async () => {
     defaultConversationColor: ipcGetDefaultConversationColor(),
   });
 
-  const {
-    availableCameras,
-    availableMicrophones,
-    availableSpeakers,
-  } = availableIODevices;
+  const { availableCameras, availableMicrophones, availableSpeakers } =
+    availableIODevices;
 
-  const {
-    hasMinimizeToAndStartInSystemTray,
-    hasMinimizeToSystemTray,
-  } = getSystemTraySettingValues(systemTraySetting);
+  const { hasMinimizeToAndStartInSystemTray, hasMinimizeToSystemTray } =
+    getSystemTraySettingValues(systemTraySetting);
 
   const props = {
     // Settings
@@ -246,7 +239,6 @@ const renderPreferences = async () => {
     selectedCamera,
     selectedMicrophone,
     selectedSpeaker,
-    theme: themeSetting === 'system' ? window.systemTheme : themeSetting,
     themeSetting,
     universalExpireTimer,
     whoCanFindMe,
@@ -261,7 +253,7 @@ const renderPreferences = async () => {
     editCustomColor: ipcEditCustomColor,
     getConversationsWithCustomColor: ipcGetConversationsWithCustomColor,
     initialSpellCheckSetting:
-      SignalWindow.config.appStartInitialSpellcheckSetting === 'true',
+      SignalContext.config.appStartInitialSpellcheckSetting === 'true',
     makeSyncRequest: ipcMakeSyncRequest,
     removeCustomColor: ipcRemoveCustomColor,
     removeCustomColorOnConversations: ipcRemoveCustomColorOnConversations,
@@ -278,7 +270,7 @@ const renderPreferences = async () => {
     isPhoneNumberSharingSupported,
     isSyncSupported: !isSyncNotSupported,
     isSystemTraySupported: Settings.isSystemTraySupported(
-      SignalWindow.getVersion()
+      SignalContext.getVersion()
     ),
 
     // Change handlers
@@ -344,7 +336,7 @@ const renderPreferences = async () => {
     //    rerender.
     onZoomFactorChange: settingZoomFactor.setValue,
 
-    i18n: SignalWindow.i18n,
+    i18n: SignalContext.i18n,
   };
 
   function reRender<Value>(f: (value: Value) => Promise<Value>) {
@@ -360,9 +352,9 @@ const renderPreferences = async () => {
   );
 };
 
-ipcRenderer.on('render', () => renderPreferences());
+ipcRenderer.on('preferences-changed', () => renderPreferences());
 
-contextBridge.exposeInMainWorld('SignalWindow', {
-  ...SignalWindow,
+contextBridge.exposeInMainWorld('SignalContext', {
+  ...SignalContext,
   renderWindow: renderPreferences,
 });

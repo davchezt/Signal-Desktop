@@ -6,16 +6,20 @@ import {
   preProcessAttachment,
   processAttachment,
 } from './processAttachment';
-import { AttachmentType } from '../types/Attachment';
+import type {
+  AttachmentDraftType,
+  InMemoryAttachmentDraftType,
+} from '../types/Attachment';
 import { AttachmentToastType } from '../types/AttachmentToastType';
+import * as log from '../logging/log';
 
 export type AddAttachmentActionType = (
   conversationId: string,
-  attachment: AttachmentType
+  attachment: InMemoryAttachmentDraftType
 ) => unknown;
 export type AddPendingAttachmentActionType = (
   conversationId: string,
-  pendingAttachment: AttachmentType
+  pendingAttachment: AttachmentDraftType
 ) => unknown;
 export type RemoveAttachmentActionType = (
   conversationId: string,
@@ -26,7 +30,7 @@ export type HandleAttachmentsProcessingArgsType = {
   addAttachment: AddAttachmentActionType;
   addPendingAttachment: AddPendingAttachmentActionType;
   conversationId: string;
-  draftAttachments: ReadonlyArray<AttachmentType>;
+  draftAttachments: ReadonlyArray<AttachmentDraftType>;
   files: ReadonlyArray<File>;
   onShowToast: (toastType: AttachmentToastType) => unknown;
   removeAttachment: RemoveAttachmentActionType;
@@ -74,6 +78,10 @@ export async function handleAttachmentsProcessing({
         }
         addAttachment(conversationId, attachment);
       } catch (err) {
+        log.error(
+          'handleAttachmentsProcessing: failed to process attachment:',
+          err.stack
+        );
         removeAttachment(conversationId, file.path);
         onShowToast(AttachmentToastType.ToastUnableToLoadAttachment);
       }

@@ -4,13 +4,13 @@
 import { join } from 'path';
 import { Worker } from 'worker_threads';
 import { format } from 'util';
+import { app } from 'electron';
 
 import { strictAssert } from '../util/assert';
 import { explodePromise } from '../util/explodePromise';
 import type { LoggerType } from '../types/Logging';
 import { isCorruptionError } from './errors';
 
-const ASAR_PATTERN = /app\.asar$/;
 const MIN_TRACE_DURATION = 40;
 
 export type InitializeOptions = Readonly<{
@@ -85,23 +85,11 @@ export class MainSQL {
   private onResponse = new Map<number, PromisePair<any>>();
 
   constructor() {
-    let appDir = join(__dirname, '..', '..');
-    let isBundled = false;
+    const scriptDir = join(app.getAppPath(), 'ts', 'sql', 'mainWorker.js');
+    this.worker = new Worker(scriptDir);
 
-    if (ASAR_PATTERN.test(appDir)) {
-      appDir = appDir.replace(ASAR_PATTERN, 'app.asar.unpacked');
-      isBundled = true;
-    }
-
-    const scriptDir = join(appDir, 'ts', 'sql');
-    this.worker = new Worker(
-      join(scriptDir, isBundled ? 'mainWorker.bundle.js' : 'mainWorker.js')
-    );
-
-    const {
-      promise: onCorruption,
-      resolve: resolveCorruption,
-    } = explodePromise<Error>();
+    const { promise: onCorruption, resolve: resolveCorruption } =
+      explodePromise<Error>();
     this.onCorruption = onCorruption;
 
     this.worker.on('message', (wrappedResponse: WrappedWorkerResponse) => {

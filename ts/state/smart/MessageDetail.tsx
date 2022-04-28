@@ -3,14 +3,13 @@
 
 import { connect } from 'react-redux';
 
-import {
-  MessageDetail,
-  ExternalProps as MessageDetailProps,
-} from '../../components/conversation/MessageDetail';
+import type { ExternalProps as MessageDetailProps } from '../../components/conversation/MessageDetail';
+import { MessageDetail } from '../../components/conversation/MessageDetail';
 
 import { mapDispatchToProps } from '../actions';
-import { StateType } from '../reducer';
-import { getIntl, getInteractionMode } from '../selectors/user';
+import type { StateType } from '../reducer';
+import { getPreferredBadgeSelector } from '../selectors/badges';
+import { getIntl, getInteractionMode, getTheme } from '../selectors/user';
 import { renderAudioAttachment } from './renderAudioAttachment';
 import { renderEmojiPicker } from './renderEmojiPicker';
 import { renderReactionPicker } from './renderReactionPicker';
@@ -19,11 +18,13 @@ import { getContactNameColorSelector } from '../selectors/conversations';
 export { Contact } from '../../components/conversation/MessageDetail';
 export type OwnProps = Omit<
   MessageDetailProps,
+  | 'getPreferredBadge'
   | 'i18n'
   | 'interactionMode'
   | 'renderAudioAttachment'
   | 'renderEmojiPicker'
   | 'renderReactionPicker'
+  | 'theme'
 >;
 
 const mapStateToProps = (
@@ -47,6 +48,7 @@ const mapStateToProps = (
     openLink,
     reactToMessage,
     replyToMessage,
+    retryDeleteForEveryone,
     retrySend,
     showContactDetail,
     showContactModal,
@@ -54,6 +56,7 @@ const mapStateToProps = (
     showExpiredOutgoingTapToViewToast,
     showForwardMessageModal,
     showVisualAttachment,
+    startConversation,
   } = props;
 
   const contactNameColor =
@@ -64,6 +67,8 @@ const mapStateToProps = (
         )
       : undefined;
 
+  const getPreferredBadge = getPreferredBadgeSelector(state);
+
   return {
     contacts,
     contactNameColor,
@@ -72,8 +77,10 @@ const mapStateToProps = (
     receivedAt,
     sentAt,
 
+    getPreferredBadge,
     i18n: getIntl(state),
     interactionMode: getInteractionMode(state),
+    theme: getTheme(state),
 
     showSafetyNumber,
 
@@ -88,6 +95,7 @@ const mapStateToProps = (
     renderEmojiPicker,
     renderReactionPicker,
     replyToMessage,
+    retryDeleteForEveryone,
     retrySend,
     showContactDetail,
     showContactModal,
@@ -95,6 +103,7 @@ const mapStateToProps = (
     showExpiredOutgoingTapToViewToast,
     showForwardMessageModal,
     showVisualAttachment,
+    startConversation,
   };
 };
 

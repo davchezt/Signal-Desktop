@@ -6,7 +6,7 @@ import { v4 as getGuid } from 'uuid';
 
 import { getRandomBytes } from '../../Crypto';
 import AccountManager from '../../textsecure/AccountManager';
-import { OuterSignedPrekeyType } from '../../textsecure/Types.d';
+import type { OuterSignedPrekeyType } from '../../textsecure/Types.d';
 import { UUID } from '../../types/UUID';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -51,9 +51,12 @@ describe('AccountManager', () => {
     });
     afterEach(() => {
       window.textsecure.storage.user.getUuid = originalGetUuid;
-      window.textsecure.storage.protocol.getIdentityKeyPair = originalGetIdentityKeyPair;
-      window.textsecure.storage.protocol.loadSignedPreKeys = originalLoadSignedPreKeys;
-      window.textsecure.storage.protocol.removeSignedPreKey = originalRemoveSignedPreKey;
+      window.textsecure.storage.protocol.getIdentityKeyPair =
+        originalGetIdentityKeyPair;
+      window.textsecure.storage.protocol.loadSignedPreKeys =
+        originalLoadSignedPreKeys;
+      window.textsecure.storage.protocol.removeSignedPreKey =
+        originalRemoveSignedPreKey;
     });
 
     describe('encrypted device name', () => {

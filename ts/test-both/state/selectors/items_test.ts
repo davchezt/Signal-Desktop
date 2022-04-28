@@ -1,11 +1,14 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { assert } from 'chai';
 import {
+  getAreWeASubscriber,
   getEmojiSkinTone,
   getPinnedConversationIds,
+  getPreferredLeftPaneWidth,
   getPreferredReactionEmoji,
+  getUsernamesEnabled,
 } from '../../../state/selectors/items';
 import type { StateType } from '../../../state/reducer';
 import type { ItemsStateType } from '../../../state/ducks/items';
@@ -19,6 +22,21 @@ describe('both/state/selectors/items', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
   }
+
+  describe('#getAreWeASubscriber', () => {
+    it('returns false if the value is not in storage', () => {
+      assert.isFalse(getAreWeASubscriber(getRootState({})));
+    });
+
+    it('returns the value in storage', () => {
+      assert.isFalse(
+        getAreWeASubscriber(getRootState({ areWeASubscriber: false }))
+      );
+      assert.isTrue(
+        getAreWeASubscriber(getRootState({ areWeASubscriber: true }))
+      );
+    });
+  });
 
   describe('#getEmojiSkinTone', () => {
     it('returns 0 if passed anything invalid', () => {
@@ -47,6 +65,32 @@ describe('both/state/selectors/items', () => {
         const state = getRootState({ skinTone });
         assert.strictEqual(getEmojiSkinTone(state), skinTone);
       });
+    });
+  });
+
+  describe('#getPreferredLeftPaneWidth', () => {
+    it('returns a default if no value is present', () => {
+      const state = getRootState({});
+      assert.strictEqual(getPreferredLeftPaneWidth(state), 320);
+    });
+
+    it('returns a default value if passed something invalid', () => {
+      [undefined, null, '250', [250], 250.123].forEach(
+        preferredLeftPaneWidth => {
+          const state = getRootState({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            preferredLeftPaneWidth: preferredLeftPaneWidth as any,
+          });
+          assert.strictEqual(getPreferredLeftPaneWidth(state), 320);
+        }
+      );
+    });
+
+    it('returns the value in storage if it is valid', () => {
+      const state = getRootState({
+        preferredLeftPaneWidth: 345,
+      });
+      assert.strictEqual(getPreferredLeftPaneWidth(state), 345);
     });
   });
 
@@ -98,6 +142,38 @@ describe('both/state/selectors/items', () => {
       const actual = getPreferredReactionEmoji(state);
 
       assert.deepStrictEqual(actual, preferredReactionEmoji);
+    });
+  });
+
+  describe('#getUsernamesEnabled', () => {
+    it('returns false if the flag is missing or disabled', () => {
+      [
+        {},
+        { remoteConfig: {} },
+        {
+          remoteConfig: {
+            'desktop.usernames': {
+              name: 'desktop.usernames' as const,
+              enabled: false,
+            },
+          },
+        },
+      ].forEach(itemsState => {
+        const state = getRootState(itemsState);
+        assert.isFalse(getUsernamesEnabled(state));
+      });
+    });
+
+    it('returns true if the flag is enabled', () => {
+      const state = getRootState({
+        remoteConfig: {
+          'desktop.usernames': {
+            name: 'desktop.usernames' as const,
+            enabled: true,
+          },
+        },
+      });
+      assert.isTrue(getUsernamesEnabled(state));
     });
   });
 });

@@ -1,10 +1,12 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import React, { FunctionComponent, ReactNode } from 'react';
+import type { FunctionComponent, ReactNode } from 'react';
+import React from 'react';
 
-import { LocalizerType } from '../types/Util';
-import { ConversationType } from '../state/ducks/conversations';
+import type { LocalizerType, ThemeType } from '../types/Util';
+import type { ConversationType } from '../state/ducks/conversations';
+import type { PreferredBadgeSelectorType } from '../state/selectors/badges';
 import { Intl } from './Intl';
 import { ContactName } from './conversation/ContactName';
 import { GroupDialog } from './GroupDialog';
@@ -12,15 +14,15 @@ import { openLinkInWebBrowser } from '../util/openLinkInWebBrowser';
 
 type PropsType = {
   contacts: Array<ConversationType>;
+  getPreferredBadge: PreferredBadgeSelectorType;
   i18n: LocalizerType;
   onClose: () => void;
+  theme: ThemeType;
 };
 
-export const NewlyCreatedGroupInvitedContactsDialog: FunctionComponent<PropsType> = ({
-  contacts,
-  i18n,
-  onClose,
-}) => {
+export const NewlyCreatedGroupInvitedContactsDialog: FunctionComponent<
+  PropsType
+> = ({ contacts, getPreferredBadge, i18n, onClose, theme }) => {
   let title: string;
   let body: ReactNode;
   if (contacts.length === 1) {
@@ -55,7 +57,12 @@ export const NewlyCreatedGroupInvitedContactsDialog: FunctionComponent<PropsType
         <GroupDialog.Paragraph>
           {i18n('NewlyCreatedGroupInvitedContactsDialog--body--info-paragraph')}
         </GroupDialog.Paragraph>
-        <GroupDialog.Contacts contacts={contacts} i18n={i18n} />
+        <GroupDialog.Contacts
+          contacts={contacts}
+          getPreferredBadge={getPreferredBadge}
+          i18n={i18n}
+          theme={theme}
+        />
       </>
     );
   }

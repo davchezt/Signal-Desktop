@@ -1,18 +1,34 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { strictAssert } from '../util/assert';
-import { isValidGuid } from '../util/isValidGuid';
+import { v4 as generateUUID } from 'uuid';
 
-export type UUIDStringType = `${string}-${string}-${string}-${string}-${string}`;
+import { strictAssert } from '../util/assert';
+
+export type UUIDStringType =
+  `${string}-${string}-${string}-${string}-${string}`;
+
+export enum UUIDKind {
+  ACI = 'ACI',
+  PNI = 'PNI',
+  Unknown = 'Unknown',
+}
+
+export const UUID_BYTE_SIZE = 16;
+
+export const isValidUuid = (value: unknown): value is UUIDStringType =>
+  typeof value === 'string' &&
+  /^[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(
+    value
+  );
 
 export class UUID {
   constructor(protected readonly value: string) {
-    strictAssert(isValidGuid(value), `Invalid UUID: ${value}`);
+    strictAssert(isValidUuid(value), `Invalid UUID: ${value}`);
   }
 
   public toString(): UUIDStringType {
-    return (this.value as unknown) as UUIDStringType;
+    return this.value as UUIDStringType;
   }
 
   public isEqual(other: UUID): boolean {
@@ -40,5 +56,25 @@ export class UUID {
       `Conversation ${identifier} not found or has no uuid`
     );
     return uuid;
+  }
+
+  public static generate(): UUID {
+    return new UUID(generateUUID());
+  }
+
+  public static cast(value: UUIDStringType): never;
+  public static cast(value: string): UUIDStringType;
+
+  public static cast(value: string): UUIDStringType {
+    return new UUID(value.toLowerCase()).toString();
+  }
+
+  // For testing
+  public static fromPrefix(value: string): UUID {
+    let padded = value;
+    while (padded.length < 8) {
+      padded += '0';
+    }
+    return new UUID(`${padded}-0000-4000-8000-${'0'.repeat(12)}`);
   }
 }

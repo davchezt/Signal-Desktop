@@ -1,7 +1,8 @@
-// Copyright 2020 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import * as durations from '../util/durations';
+import { clearTimeoutIfNecessary } from '../util/clearTimeoutIfNecessary';
 import { explodePromise } from '../util/explodePromise';
 import { toLogFormat } from '../types/errors';
 import * as log from '../logging/log';
@@ -12,9 +13,11 @@ type TaskType = {
 };
 
 const tasks = new Set<TaskType>();
+let shouldStartTimers = true;
 
 export function suspendTasksWithTimeout(): void {
   log.info(`TaskWithTimeout: suspending ${tasks.size} tasks`);
+  shouldStartTimers = false;
   for (const task of tasks) {
     task.suspend();
   }
@@ -22,6 +25,7 @@ export function suspendTasksWithTimeout(): void {
 
 export function resumeTasksWithTimeout(): void {
   log.info(`TaskWithTimeout: resuming ${tasks.size} tasks`);
+  shouldStartTimers = true;
   for (const task of tasks) {
     task.resume();
   }
@@ -63,10 +67,8 @@ export default function createTaskWithTimeout<T, Args extends Array<unknown>>(
     };
 
     const stopTimer = () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      clearTimeoutIfNecessary(timer);
+      timer = undefined;
     };
 
     const entry: TaskType = {
@@ -75,7 +77,9 @@ export default function createTaskWithTimeout<T, Args extends Array<unknown>>(
     };
 
     tasks.add(entry);
-    startTimer();
+    if (shouldStartTimers) {
+      startTimer();
+    }
 
     let result: unknown;
 

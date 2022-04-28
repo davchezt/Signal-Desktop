@@ -1,8 +1,8 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { ThunkAction } from 'redux-thunk';
-import { StateType as RootStateType } from '../reducer';
+import type { ThunkAction } from 'redux-thunk';
+import type { StateType as RootStateType } from '../reducer';
 import * as log from '../../logging/log';
 
 // State
@@ -70,7 +70,7 @@ function openInbox(): ThunkAction<
   return async dispatch => {
     log.info('open inbox');
 
-    await window.ConversationController.loadPromise();
+    await window.ConversationController.load();
 
     dispatch({
       type: OPEN_INBOX,

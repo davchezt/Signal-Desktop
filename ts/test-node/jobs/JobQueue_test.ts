@@ -1,6 +1,7 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
-/* eslint-disable max-classes-per-file, class-methods-use-this */
+
+/* eslint-disable max-classes-per-file */
 
 import { assert } from 'chai';
 import * as sinon from 'sinon';
@@ -12,11 +13,10 @@ import PQueue from 'p-queue';
 import { JobError } from '../../jobs/JobError';
 import { TestJobQueueStore } from './TestJobQueueStore';
 import { missingCaseError } from '../../util/missingCaseError';
-import { assertRejects } from '../helpers';
 import type { LoggerType } from '../../types/Logging';
 
 import { JobQueue } from '../../jobs/JobQueue';
-import { ParsedJob, StoredJob, JobQueueStore } from '../../jobs/types';
+import type { ParsedJob, StoredJob, JobQueueStore } from '../../jobs/types';
 
 describe('JobQueue', () => {
   describe('end-to-end tests', () => {
@@ -127,7 +127,9 @@ describe('JobQueue', () => {
           return z.number().parse(data);
         }
 
-        protected getInMemoryQueue(parsedJob: ParsedJob<number>): PQueue {
+        protected override getInMemoryQueue(
+          parsedJob: ParsedJob<number>
+        ): PQueue {
           assert(
             new Set([1, 2, 3, 4]).has(parsedJob.data),
             'Bad data passed to `getInMemoryQueue`'
@@ -228,6 +230,45 @@ describe('JobQueue', () => {
       assert.lengthOf(queueTypes['test 2'], 2);
     });
 
+    it('can override the insertion logic, skipping storage persistence', async () => {
+      const store = new TestJobQueueStore();
+
+      class TestQueue extends JobQueue<string> {
+        parseData(data: unknown): string {
+          return z.string().parse(data);
+        }
+
+        async run(): Promise<void> {
+          return Promise.resolve();
+        }
+      }
+
+      const queue = new TestQueue({
+        store,
+        queueType: 'test queue',
+        maxAttempts: 1,
+      });
+
+      queue.streamJobs();
+
+      const insert = sinon.stub().resolves();
+
+      await queue.add('foo bar', insert);
+
+      assert.lengthOf(store.storedJobs, 0);
+
+      sinon.assert.calledOnce(insert);
+      sinon.assert.calledWith(
+        insert,
+        sinon.match({
+          id: sinon.match.string,
+          timestamp: sinon.match.number,
+          queueType: 'test queue',
+          data: 'foo bar',
+        })
+      );
+    });
+
     it('retries jobs, running them up to maxAttempts times', async () => {
       type TestJobData = 'foo' | 'bar';
 
@@ -274,11 +315,15 @@ describe('JobQueue', () => {
 
       retryQueue.streamJobs();
 
-      await (await retryQueue.add('foo')).completion;
+      await (
+        await retryQueue.add('foo')
+      ).completion;
 
       let booErr: unknown;
       try {
-        await (await retryQueue.add('bar')).completion;
+        await (
+          await retryQueue.add('bar')
+        ).completion;
       } catch (err: unknown) {
         booErr = err;
       }
@@ -326,7 +371,9 @@ describe('JobQueue', () => {
       queue.streamJobs();
 
       try {
-        await (await queue.add('foo')).completion;
+        await (
+          await queue.add('foo')
+        ).completion;
       } catch (err: unknown) {
         // We expect this to fail.
       }
@@ -557,7 +604,9 @@ describe('JobQueue', () => {
 
       queue.streamJobs();
 
-      await (await queue.add(123)).completion;
+      await (
+        await queue.add(123)
+      ).completion;
 
       assert.deepEqual(events, ['insert', 'parsing data', 'running']);
     });
@@ -753,8 +802,8 @@ describe('JobQueue', () => {
 
       noopQueue.streamJobs();
 
-      await assertRejects(() => noopQueue.streamJobs());
-      await assertRejects(() => noopQueue.streamJobs());
+      await assert.isRejected(noopQueue.streamJobs());
+      await assert.isRejected(noopQueue.streamJobs());
 
       sinon.assert.calledOnce(fakeStore.stream as sinon.SinonStub);
     });
@@ -784,7 +833,7 @@ describe('JobQueue', () => {
         maxAttempts: 99,
       });
 
-      await assertRejects(() => noopQueue.add(undefined));
+      await assert.isRejected(noopQueue.add(undefined));
 
       sinon.assert.notCalled(fakeStore.stream as sinon.SinonStub);
     });

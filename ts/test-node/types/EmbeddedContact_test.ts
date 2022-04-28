@@ -5,16 +5,16 @@ import { assert } from 'chai';
 import * as sinon from 'sinon';
 
 import { IMAGE_GIF, IMAGE_PNG } from '../../types/MIME';
-import { MessageAttributesType } from '../../model-types.d';
+import type { MessageAttributesType } from '../../model-types.d';
+import type { Avatar, Email, Phone } from '../../types/EmbeddedContact';
 import {
-  Avatar,
-  Email,
-  Phone,
   _validate,
   embeddedContactSelector,
   getName,
   parseAndWriteAvatar,
 } from '../../types/EmbeddedContact';
+import { fakeAttachment } from '../../test-both/helpers/fakeAttachment';
+import { UUID } from '../../types/UUID';
 
 describe('Contact', () => {
   const NUMBER = '+12025550099';
@@ -114,7 +114,7 @@ describe('Contact', () => {
   describe('embeddedContactSelector', () => {
     const regionCode = '1';
     const firstNumber = '+1202555000';
-    const isNumberOnSignal = false;
+    const uuid = undefined;
     const getAbsoluteAttachmentPath = (path: string) => `absolute:${path}`;
 
     it('eliminates avatar if it has had an attachment download error', () => {
@@ -127,10 +127,10 @@ describe('Contact', () => {
         organization: 'Somewhere, Inc.',
         avatar: {
           isProfile: true,
-          avatar: {
+          avatar: fakeAttachment({
             error: true,
             contentType: IMAGE_GIF,
-          },
+          }),
         },
       };
       const expected = {
@@ -142,13 +142,13 @@ describe('Contact', () => {
         organization: 'Somewhere, Inc.',
         avatar: undefined,
         firstNumber,
-        isNumberOnSignal,
+        uuid,
         number: undefined,
       };
       const actual = embeddedContactSelector(contact, {
         regionCode,
         firstNumber,
-        isNumberOnSignal,
+        uuid,
         getAbsoluteAttachmentPath,
       });
       assert.deepEqual(actual, expected);
@@ -164,10 +164,10 @@ describe('Contact', () => {
         organization: 'Somewhere, Inc.',
         avatar: {
           isProfile: true,
-          avatar: {
+          avatar: fakeAttachment({
             pending: true,
             contentType: IMAGE_GIF,
-          },
+          }),
         },
       };
       const expected = {
@@ -179,26 +179,28 @@ describe('Contact', () => {
         organization: 'Somewhere, Inc.',
         avatar: {
           isProfile: true,
-          avatar: {
+          avatar: fakeAttachment({
             pending: true,
             path: undefined,
             contentType: IMAGE_GIF,
-          },
+          }),
         },
         firstNumber,
-        isNumberOnSignal,
+        uuid,
         number: undefined,
       };
       const actual = embeddedContactSelector(contact, {
         regionCode,
         firstNumber,
-        isNumberOnSignal,
+        uuid,
         getAbsoluteAttachmentPath,
       });
       assert.deepEqual(actual, expected);
     });
 
     it('calculates absolute path', () => {
+      const fullUuid = UUID.generate().toString();
+
       const contact = {
         name: {
           displayName: 'displayName',
@@ -208,10 +210,10 @@ describe('Contact', () => {
         organization: 'Somewhere, Inc.',
         avatar: {
           isProfile: true,
-          avatar: {
+          avatar: fakeAttachment({
             path: 'somewhere',
             contentType: IMAGE_GIF,
-          },
+          }),
         },
       };
       const expected = {
@@ -223,19 +225,19 @@ describe('Contact', () => {
         organization: 'Somewhere, Inc.',
         avatar: {
           isProfile: true,
-          avatar: {
+          avatar: fakeAttachment({
             path: 'absolute:somewhere',
             contentType: IMAGE_GIF,
-          },
+          }),
         },
         firstNumber,
-        isNumberOnSignal: true,
+        uuid: fullUuid,
         number: undefined,
       };
       const actual = embeddedContactSelector(contact, {
         regionCode,
         firstNumber,
-        isNumberOnSignal: true,
+        uuid: fullUuid,
         getAbsoluteAttachmentPath,
       });
       assert.deepEqual(actual, expected);
@@ -335,9 +337,9 @@ describe('Contact', () => {
                 value: NUMBER,
               },
             ],
-            avatar: ({
+            avatar: {
               isProfile: true,
-            } as unknown) as Avatar,
+            } as unknown as Avatar,
           },
         ],
       };
@@ -363,10 +365,10 @@ describe('Contact', () => {
 
     it('writes avatar to disk', async () => {
       const upgradeAttachment = async () => {
-        return {
+        return fakeAttachment({
           path: 'abc/abcdefg',
           contentType: IMAGE_PNG,
-        };
+        });
       };
       const upgradeVersion = parseAndWriteAvatar(upgradeAttachment);
 
@@ -395,13 +397,13 @@ describe('Contact', () => {
                 street: '5 Somewhere Ave.',
               },
             ],
-            avatar: ({
+            avatar: {
               otherKey: 'otherValue',
               avatar: {
                 contentType: 'image/png',
                 data: Buffer.from('It’s easy if you try'),
               },
-            } as unknown) as Avatar,
+            } as unknown as Avatar,
           },
         ],
       };
@@ -430,10 +432,10 @@ describe('Contact', () => {
         avatar: {
           otherKey: 'otherValue',
           isProfile: false,
-          avatar: {
+          avatar: fakeAttachment({
             contentType: IMAGE_PNG,
             path: 'abc/abcdefg',
-          },
+          }),
         },
       };
 
@@ -460,9 +462,9 @@ describe('Contact', () => {
               displayName: 'Someone Somewhere',
             },
             number: [
-              ({
+              {
                 type: 1,
-              } as unknown) as Phone,
+              } as unknown as Phone,
             ],
             email: [
               {
@@ -557,14 +559,14 @@ describe('Contact', () => {
               displayName: 'Someone Somewhere',
             },
             number: [
-              ({
+              {
                 type: 1,
-              } as unknown) as Phone,
+              } as unknown as Phone,
             ],
             email: [
-              ({
+              {
                 type: 1,
-              } as unknown) as Email,
+              } as unknown as Email,
             ],
           },
         ],

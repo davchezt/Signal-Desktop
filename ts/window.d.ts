@@ -1,9 +1,9 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Captures the globals put in place by preload.js, background.js and others
 
-import { DeepPartial, Store } from 'redux';
+import { Store } from 'redux';
 import * as Backbone from 'backbone';
 import * as Underscore from 'underscore';
 import moment from 'moment';
@@ -14,8 +14,6 @@ import * as Util from './util';
 import {
   ConversationModelCollectionType,
   MessageModelCollectionType,
-  MessageAttributesType,
-  ReactionAttributesType,
 } from './model-types.d';
 import { TextSecureType } from './textsecure.d';
 import { Storage } from './textsecure/Storage';
@@ -31,18 +29,14 @@ import * as Curve from './Curve';
 import * as RemoteConfig from './RemoteConfig';
 import * as OS from './OS';
 import { getEnvironment } from './environment';
-import * as zkgroup from './util/zkgroup';
-import { LocalizerType, BodyRangesType, BodyRangeType } from './types/Util';
-import * as EmbeddedContact from './types/EmbeddedContact';
-import * as Errors from './types/errors';
+import { LocalizerType } from './types/Util';
+import type { Receipt } from './types/Receipt';
 import { ConversationController } from './ConversationController';
 import { ReduxActions } from './state/types';
 import { createStore } from './state/createStore';
 import { createApp } from './state/roots/createApp';
 import { createChatColorPicker } from './state/roots/createChatColorPicker';
-import { createCompositionArea } from './state/roots/createCompositionArea';
 import { createConversationDetails } from './state/roots/createConversationDetails';
-import { createConversationHeader } from './state/roots/createConversationHeader';
 import { createForwardMessageModal } from './state/roots/createForwardMessageModal';
 import { createGroupLinkManagement } from './state/roots/createGroupLinkManagement';
 import { createGroupV1MigrationModal } from './state/roots/createGroupV1MigrationModal';
@@ -56,7 +50,6 @@ import { createSafetyNumberViewer } from './state/roots/createSafetyNumberViewer
 import { createShortcutGuideModal } from './state/roots/createShortcutGuideModal';
 import { createStickerManager } from './state/roots/createStickerManager';
 import { createStickerPreviewModal } from './state/roots/createStickerPreviewModal';
-import { createTimeline } from './state/roots/createTimeline';
 import * as appDuck from './state/ducks/app';
 import * as callingDuck from './state/ducks/calling';
 import * as conversationsDuck from './state/ducks/conversations';
@@ -72,16 +65,13 @@ import * as stickersDuck from './state/ducks/stickers';
 import * as conversationsSelectors from './state/selectors/conversations';
 import * as searchSelectors from './state/selectors/search';
 import AccountManager from './textsecure/AccountManager';
-import { SendOptionsType } from './textsecure/SendMessage';
+import { ContactWithHydratedAvatar } from './textsecure/SendMessage';
 import Data from './sql/Client';
-import { UserMessage } from './types/Message';
 import { PhoneNumberFormat } from 'google-libphonenumber';
 import { MessageModel } from './models/messages';
 import { ConversationModel } from './models/conversations';
-import { combineNames } from './util';
 import { BatcherType } from './util/batcher';
 import { AttachmentList } from './components/conversation/AttachmentList';
-import { CaptionEditor } from './components/CaptionEditor';
 import { ChatColorPicker } from './components/ChatColorPicker';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
 import { ContactDetail } from './components/conversation/ContactDetail';
@@ -94,33 +84,26 @@ import { ProgressModal } from './components/ProgressModal';
 import { Quote } from './components/conversation/Quote';
 import { StagedLinkPreview } from './components/conversation/StagedLinkPreview';
 import { DisappearingTimeDialog } from './components/DisappearingTimeDialog';
-import { WhatsNew } from './components/WhatsNew';
-import { MIMEType } from './types/MIME';
+import { WhatsNewLink } from './components/WhatsNewLink';
 import { DownloadedAttachmentType } from './types/Attachment';
 import { ElectronLocaleType } from './util/mapToSupportLocale';
 import { SignalProtocolStore } from './SignalProtocolStore';
-import { Context as SignalContext } from './context';
 import { StartupQueue } from './util/StartupQueue';
 import { SocketStatus } from './types/SocketStatus';
 import SyncRequest from './textsecure/SyncRequest';
-import { ConversationColorType, CustomColorType } from './types/Colors';
 import { MessageController } from './util/MessageController';
-import { isValidGuid } from './util/isValidGuid';
 import { StateType } from './state/reducer';
 import { SystemTraySetting } from './types/SystemTraySetting';
 import { UUID } from './types/UUID';
 import { Address } from './types/Address';
 import { QualifiedAddress } from './types/QualifiedAddress';
 import { CI } from './CI';
-import { IPCEventsType, IPCEventsValuesType } from './util/createIPCEvents';
+import { IPCEventsType } from './util/createIPCEvents';
 import { ConversationView } from './views/conversation_view';
-import { DebugLogView } from './views/debug_log_view';
-import { LoggerType } from './types/Logging';
-import { SettingType } from './util/preload';
+import type { SignalContextType } from './windows/context';
+import type { EmbeddedContactType } from './types/EmbeddedContact';
 
 export { Long } from 'long';
-
-type TaskResultType = any;
 
 export type WhatIsThis = any;
 
@@ -135,17 +118,40 @@ type ConfirmationDialogViewProps = {
   resolve: () => void;
 };
 
+export declare class WebAudioRecorderClass {
+  constructor(
+    node: GainNode,
+    options: {
+      encoding: string;
+      workerDir: string;
+      options?: { timeLimit?: number };
+    }
+  );
+
+  // Callbacks
+  onComplete?: (recorder: WebAudioRecorderClass, blob: Blob) => unknown;
+  onError?: (recorder: WebAudioRecorderClass, error: Error) => unknown;
+  onTimeout?: () => unknown;
+
+  // Class properties
+  startRecording: () => unknown;
+  finishRecording: () => unknown;
+  isRecording: () => boolean;
+  cancelRecording: () => unknown;
+  worker: Worker;
+}
+
 declare global {
   // We want to extend `window`'s properties, so we need an interface.
   // eslint-disable-next-line no-restricted-syntax
   interface Window {
     startApp: () => void;
 
-    QRCode: any;
-    WebAudioRecorder: any;
-    closeDebugLog: () => unknown;
     removeSetupMenuItems: () => unknown;
-    showPermissionsPopup: () => unknown;
+    showPermissionsPopup: (
+      forCalling: boolean,
+      forCamera: boolean
+    ) => Promise<void>;
 
     FontFace: typeof FontFace;
     _: typeof Underscore;
@@ -155,8 +161,8 @@ declare global {
     imageToBlurHash: typeof imageToBlurHash;
     loadImage: any;
     isBehindProxy: () => boolean;
-    getAutoLaunch: () => boolean;
-    setAutoLaunch: (value: boolean) => void;
+    getAutoLaunch: () => Promise<boolean>;
+    setAutoLaunch: (value: boolean) => Promise<void>;
 
     PQueue: typeof PQueue;
     PQueueType: PQueue;
@@ -164,6 +170,7 @@ declare global {
       render: (template: string, data: any, partials?: any) => string;
       parse: (template: string) => void;
     };
+    WebAudioRecorder: typeof WebAudioRecorderClass;
 
     WhatIsThis: WhatIsThis;
 
@@ -173,6 +180,11 @@ declare global {
     baseAttachmentsPath: string;
     baseStickersPath: string;
     baseTempPath: string;
+    crashReports: {
+      getCount: () => Promise<number>;
+      upload: () => Promise<void>;
+      erase: () => Promise<void>;
+    };
     drawAttention: () => void;
     enterKeyboardMode: () => void;
     enterMouseMode: () => void;
@@ -182,14 +194,12 @@ declare global {
     getBuildCreation: () => number;
     getEnvironment: typeof getEnvironment;
     getExpiration: () => string;
-    getGuid: () => string;
     getHostName: () => string;
     getInboxCollection: () => ConversationModelCollectionType;
     getInteractionMode: () => 'mouse' | 'keyboard';
     getLocale: () => ElectronLocaleType;
     getMediaCameraPermissions: () => Promise<boolean>;
     getMediaPermissions: () => Promise<boolean>;
-    getNodeVersion: () => string;
     getServerPublicParams: () => string;
     getSfuUrl: () => string;
     getSocketStatus: () => SocketStatus;
@@ -197,13 +207,11 @@ declare global {
     getTitle: () => string;
     waitForEmptyEventQueue: () => Promise<void>;
     getVersion: () => string;
-    showCallingPermissionsPopup: (forCamera: boolean) => Promise<void>;
     i18n: LocalizerType;
     isActive: () => boolean;
     isAfterVersion: (version: string, anotherVersion: string) => boolean;
     isBeforeVersion: (version: string, anotherVersion: string) => boolean;
     isFullScreen: () => boolean;
-    isValidGuid: typeof isValidGuid;
     libphonenumber: {
       util: {
         getRegionCodeForNumber: (number: string) => string;
@@ -250,13 +258,9 @@ declare global {
     titleBarDoubleClick: () => void;
     unregisterForActive: (handler: () => void) => void;
     updateTrayIcon: (count: number) => void;
-    sqlInitializer: {
-      initialize: () => Promise<void>;
-      goBackToMainProcess: () => Promise<void>;
-    };
-
     Backbone: typeof Backbone;
     CI?: CI;
+
     Accessibility: {
       reducedMotionSetting: boolean;
     };
@@ -270,12 +274,12 @@ declare global {
       Services: {
         calling: CallingClass;
         enableStorageService: () => boolean;
-        eraseAllStorageServiceState: () => Promise<void>;
+        eraseAllStorageServiceState: (options?: {
+          keepUnknownFields?: boolean;
+        }) => Promise<void>;
         initializeGroupCredentialFetcher: () => void;
         initializeNetworkObserver: (network: ReduxActions['network']) => void;
         initializeUpdateListener: (updates: ReduxActions['updates']) => void;
-        onTimeout: (timestamp: number, cb: () => void, id?: string) => string;
-        removeTimeout: (uuid: string) => void;
         retryPlaceholders?: Util.RetryPlaceholders;
         lightSessionResetQueue?: PQueue;
         runStorageServiceSyncJob: () => Promise<void>;
@@ -288,34 +292,44 @@ declare global {
         writeNewAttachmentData: (data: Uint8Array) => Promise<string>;
         deleteExternalMessageFiles: (attributes: unknown) => Promise<void>;
         getAbsoluteAttachmentPath: (path: string) => string;
-        loadAttachmentData: (attachment: WhatIsThis) => WhatIsThis;
+        loadAttachmentData: <T extends { path?: string }>(
+          attachment: T
+        ) => Promise<
+          T & {
+            data: Uint8Array;
+            size: number;
+          }
+        >;
         loadQuoteData: (quote: unknown) => WhatIsThis;
+        loadContactData: (
+          contact?: Array<EmbeddedContactType>
+        ) => Promise<Array<ContactWithHydratedAvatar> | undefined>;
         loadPreviewData: (preview: unknown) => WhatIsThis;
         loadStickerData: (sticker: unknown) => WhatIsThis;
         readStickerData: (path: string) => Promise<Uint8Array>;
         deleteSticker: (path: string) => Promise<void>;
         getAbsoluteStickerPath: (path: string) => string;
-        processNewEphemeralSticker: (
-          stickerData: Uint8Array
-        ) => {
+        processNewEphemeralSticker: (stickerData: Uint8Array) => {
           path: string;
           width: number;
           height: number;
         };
-        processNewSticker: (
-          stickerData: Uint8Array
-        ) => {
+        processNewSticker: (stickerData: Uint8Array) => {
           path: string;
           width: number;
           height: number;
         };
-        copyIntoAttachmentsDirectory: (path: string) => Promise<string>;
+        copyIntoAttachmentsDirectory: (
+          path: string
+        ) => Promise<{ path: string; size: number }>;
         upgradeMessageSchema: (attributes: unknown) => WhatIsThis;
         processNewAttachment: (
           attachment: DownloadedAttachmentType
         ) => Promise<DownloadedAttachmentType>;
 
-        copyIntoTempDirectory: any;
+        copyIntoTempDirectory: (
+          path: string
+        ) => Promise<{ path: string; size: number }>;
         deleteDraftFile: (path: string) => Promise<void>;
         deleteTempFile: (path: string) => Promise<void>;
         getAbsoluteDraftPath: any;
@@ -331,6 +345,8 @@ declare global {
         deleteAvatar: (path: string) => Promise<void>;
         getAbsoluteAvatarPath: (src: string) => string;
         writeNewAvatarData: (data: Uint8Array) => Promise<string>;
+        getAbsoluteBadgeImageFilePath: (path: string) => string;
+        writeNewBadgeImageFileData: (data: Uint8Array) => Promise<string>;
       };
       Types: {
         Message: {
@@ -365,12 +381,8 @@ declare global {
         QualifiedAddress: typeof QualifiedAddress;
       };
       Util: typeof Util;
-      GroupChange: {
-        renderChange: (change: unknown, things: unknown) => Array<string>;
-      };
       Components: {
         AttachmentList: typeof AttachmentList;
-        CaptionEditor: typeof CaptionEditor;
         ChatColorPicker: typeof ChatColorPicker;
         ConfirmationDialog: typeof ConfirmationDialog;
         ContactDetail: typeof ContactDetail;
@@ -383,11 +395,10 @@ declare global {
         ProgressModal: typeof ProgressModal;
         Quote: typeof Quote;
         StagedLinkPreview: typeof StagedLinkPreview;
-        WhatsNew: typeof WhatsNew;
+        WhatsNewLink: typeof WhatsNewLink;
       };
       OS: typeof OS;
       Workflow: {
-        IdleDetector: WhatIsThis;
         MessageDataMigrator: WhatIsThis;
       };
       IndexedDB: {
@@ -400,9 +411,7 @@ declare global {
         Roots: {
           createApp: typeof createApp;
           createChatColorPicker: typeof createChatColorPicker;
-          createCompositionArea: typeof createCompositionArea;
           createConversationDetails: typeof createConversationDetails;
-          createConversationHeader: typeof createConversationHeader;
           createForwardMessageModal: typeof createForwardMessageModal;
           createGroupLinkManagement: typeof createGroupLinkManagement;
           createGroupV1MigrationModal: typeof createGroupV1MigrationModal;
@@ -416,7 +425,6 @@ declare global {
           createShortcutGuideModal: typeof createShortcutGuideModal;
           createStickerManager: typeof createStickerManager;
           createStickerPreviewModal: typeof createStickerPreviewModal;
-          createTimeline: typeof createTimeline;
         };
         Ducks: {
           app: typeof appDuck;
@@ -444,7 +452,6 @@ declare global {
       };
       challengeHandler: ChallengeHandler;
     };
-    SignalContext: SignalContext;
 
     ConversationController: ConversationController;
     Events: IPCEventsType;
@@ -471,19 +478,7 @@ declare global {
     RETRY_DELAY: boolean;
 
     // Context Isolation
-    SignalWindow: {
-      Settings: {
-        themeSetting: SettingType<IPCEventsValuesType['themeSetting']>;
-      };
-      config: string;
-      context: SignalContext;
-      getAppInstance: () => string | undefined;
-      getEnvironment: () => string;
-      getVersion: () => string;
-      i18n: LocalizerType;
-      log: LoggerType;
-      renderWindow: () => void;
-    };
+    SignalContext: SignalContextType;
   }
 
   // We want to extend `Error`, so we need an interface.
@@ -492,6 +487,13 @@ declare global {
     originalError?: Event;
     reason?: any;
     stackForLog?: string;
+  }
+
+  // We want to extend `Element`'s properties, so we need an interface.
+  // eslint-disable-next-line no-restricted-syntax
+  interface Element {
+    // WebKit-specific
+    scrollIntoViewIfNeeded: (bringToCenter?: boolean) => void;
   }
 
   // Uint8Array and ArrayBuffer are type-compatible in TypeScript's covariant
@@ -526,13 +528,6 @@ export class CanvasVideoRenderer {
   constructor(canvas: Ref<HTMLCanvasElement>);
 }
 
-export type DeliveryReceiptBatcherItemType = {
-  messageId: string;
-  source?: string;
-  sourceUuid?: string;
-  timestamp: number;
-};
-
 export class AnyViewClass extends window.Backbone.View<any> {
   public headerTitle?: string;
   static show(view: typeof AnyViewClass, element: Element): void;
@@ -547,16 +542,14 @@ export class BasicReactWrapperViewClass extends AnyViewClass {
 export type WhisperType = {
   Conversation: typeof ConversationModel;
   ConversationCollection: typeof ConversationModelCollectionType;
-  DebugLogView: typeof DebugLogView;
   Message: typeof MessageModel;
   MessageCollection: typeof MessageModelCollectionType;
 
   GroupMemberConversation: WhatIsThis;
-  RotateSignedPreKeyListener: WhatIsThis;
   WallClockListener: WhatIsThis;
 
   deliveryReceiptQueue: PQueue;
-  deliveryReceiptBatcher: BatcherType<DeliveryReceiptBatcherItemType>;
+  deliveryReceiptBatcher: BatcherType<Receipt>;
   events: Backbone.Events;
   activeConfirmationView: WhatIsThis;
 
@@ -591,11 +584,8 @@ export type WhisperType = {
   ConversationLoadingScreen: typeof AnyViewClass;
   GroupMemberList: typeof AnyViewClass;
   InboxView: typeof AnyViewClass;
-  InstallView: typeof AnyViewClass;
   KeyVerificationPanelView: typeof AnyViewClass;
   ReactWrapperView: typeof BasicReactWrapperViewClass;
-  RecorderView: typeof AnyViewClass;
   SafetyNumberChangeDialogView: typeof AnyViewClass;
-  StandaloneRegistrationView: typeof AnyViewClass;
   View: typeof AnyViewClass;
 };

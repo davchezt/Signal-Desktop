@@ -5,14 +5,15 @@ import React from 'react';
 import { connect } from 'react-redux';
 import { mapDispatchToProps } from '../actions';
 import { GlobalModalContainer } from '../../components/GlobalModalContainer';
-import { StateType } from '../reducer';
+import type { StateType } from '../reducer';
 import { SmartProfileEditorModal } from './ProfileEditorModal';
 import { SmartContactModal } from './ContactModal';
+import { SmartSafetyNumberModal } from './SafetyNumberModal';
 
-const FilteredSmartProfileEditorModal = SmartProfileEditorModal;
+import { getIntl } from '../selectors/user';
 
 function renderProfileEditor(): JSX.Element {
-  return <FilteredSmartProfileEditorModal />;
+  return <SmartProfileEditorModal />;
 }
 
 function renderContactModal(): JSX.Element {
@@ -20,10 +21,18 @@ function renderContactModal(): JSX.Element {
 }
 
 const mapStateToProps = (state: StateType) => {
+  const i18n = getIntl(state);
+
   return {
     ...state.globalModals,
+    i18n,
     renderContactModal,
     renderProfileEditor,
+    renderSafetyNumber: () => (
+      <SmartSafetyNumberModal
+        contactID={String(state.globalModals.safetyNumberModalContactId)}
+      />
+    ),
   };
 };
 

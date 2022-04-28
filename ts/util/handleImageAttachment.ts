@@ -6,11 +6,10 @@ import { ipcRenderer } from 'electron';
 import { v4 as genUuid } from 'uuid';
 
 import { blobToArrayBuffer } from '../types/VisualAttachment';
-import { IMAGE_JPEG, MIMEType, isHeic, stringToMIMEType } from '../types/MIME';
-import {
-  InMemoryAttachmentDraftType,
-  canBeTranscoded,
-} from '../types/Attachment';
+import type { MIMEType } from '../types/MIME';
+import { IMAGE_JPEG, isHeic, stringToMIMEType } from '../types/MIME';
+import type { InMemoryAttachmentDraftType } from '../types/Attachment';
+import { canBeTranscoded } from '../types/Attachment';
 import { imageToBlurHash } from './imageToBlurHash';
 import { scaleImageToLevel } from './scaleImageToLevel';
 
@@ -19,7 +18,7 @@ export async function handleImageAttachment(
 ): Promise<InMemoryAttachmentDraftType> {
   let processedFile: File | Blob = file;
 
-  if (isHeic(file.type)) {
+  if (isHeic(file.type, file.name)) {
     const uuid = genUuid();
     const bytes = new Uint8Array(await file.arrayBuffer());
 
@@ -37,8 +36,14 @@ export async function handleImageAttachment(
     processedFile = new Blob([convertedFile]);
   }
 
-  const { contentType, file: resizedBlob, fileName } = await autoScale({
-    contentType: isHeic(file.type) ? IMAGE_JPEG : stringToMIMEType(file.type),
+  const {
+    contentType,
+    file: resizedBlob,
+    fileName,
+  } = await autoScale({
+    contentType: isHeic(file.type, file.name)
+      ? IMAGE_JPEG
+      : stringToMIMEType(file.type),
     fileName: file.name,
     file: processedFile,
   });
@@ -93,6 +98,6 @@ export async function autoScale({
   return {
     contentType: IMAGE_JPEG,
     file: blob,
-    fileName: `${name}.jpeg`,
+    fileName: `${name}.jpg`,
   };
 }

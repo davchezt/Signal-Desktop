@@ -4,7 +4,7 @@
 import { assert } from 'chai';
 import * as sinon from 'sinon';
 import { noop } from 'lodash';
-import { StoredJob } from '../../jobs/types';
+import type { StoredJob } from '../../jobs/types';
 
 import { JobQueueDatabaseStore } from '../../jobs/JobQueueDatabaseStore';
 
@@ -110,7 +110,7 @@ describe('JobQueueDatabaseStore', () => {
           queueType: 'test queue',
           data: { hi: 5 },
         },
-        { shouldInsertIntoDatabase: false }
+        { shouldPersist: false }
       );
 
       await streamPromise;

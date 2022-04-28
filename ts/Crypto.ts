@@ -5,13 +5,15 @@ import { Buffer } from 'buffer';
 import pProps from 'p-props';
 import { chunk } from 'lodash';
 import Long from 'long';
-import { HKDF } from '@signalapp/signal-client';
+import { HKDF } from '@signalapp/libsignal-client';
 
 import * as Bytes from './Bytes';
 import { calculateAgreement, generateKeyPair } from './Curve';
 import * as log from './logging/log';
 import { HashType, CipherType } from './types/Crypto';
 import { ProfileDecryptError } from './types/errors';
+import { UUID, UUID_BYTE_SIZE } from './types/UUID';
+import type { UUIDStringType } from './types/UUID';
 
 export { HashType, CipherType };
 
@@ -33,7 +35,12 @@ export type EncryptedAttachment = {
 
 // Generate a number between zero and 16383
 export function generateRegistrationId(): number {
-  const id = new Uint16Array(getRandomBytes(2))[0];
+  const bytes = getRandomBytes(2);
+  const id = new Uint16Array(
+    bytes.buffer,
+    bytes.byteOffset,
+    bytes.byteLength / 2
+  )[0];
 
   // eslint-disable-next-line no-bitwise
   return id & 0x3fff;
@@ -135,7 +142,7 @@ export function decryptDeviceName(
 
 export function deriveStorageManifestKey(
   storageServiceKey: Uint8Array,
-  version: number
+  version: Long = Long.fromNumber(0)
 ): Uint8Array {
   return hmacSha256(storageServiceKey, Bytes.fromString(`Manifest_${version}`));
 }
@@ -407,10 +414,8 @@ export async function encryptCdsDiscoveryRequest(
     iv,
     queryDataPlaintext
   );
-  const {
-    data: queryDataCiphertextData,
-    mac: queryDataCiphertextMac,
-  } = _getMacAndData(queryDataCiphertext);
+  const { data: queryDataCiphertextData, mac: queryDataCiphertextMac } =
+    _getMacAndData(queryDataCiphertext);
 
   const envelopes = await pProps(
     attestations,
@@ -457,8 +462,8 @@ export function uuidToBytes(uuid: string): Uint8Array {
   );
 }
 
-export function bytesToUuid(bytes: Uint8Array): undefined | string {
-  if (bytes.byteLength !== 16) {
+export function bytesToUuid(bytes: Uint8Array): undefined | UUIDStringType {
+  if (bytes.byteLength !== UUID_BYTE_SIZE) {
     log.warn(
       'bytesToUuid: received an Uint8Array of invalid length. ' +
         'Returning undefined'
@@ -473,10 +478,10 @@ export function bytesToUuid(bytes: Uint8Array): undefined | string {
   return undefined;
 }
 
-export function splitUuids(buffer: Uint8Array): Array<string | null> {
-  const uuids = [];
-  for (let i = 0; i < buffer.byteLength; i += 16) {
-    const bytes = getBytes(buffer, i, 16);
+export function splitUuids(buffer: Uint8Array): Array<UUIDStringType | null> {
+  const uuids = new Array<UUIDStringType | null>();
+  for (let i = 0; i < buffer.byteLength; i += UUID_BYTE_SIZE) {
+    const bytes = getBytes(buffer, i, UUID_BYTE_SIZE);
     const hex = Bytes.toHex(bytes);
     const chunks = [
       hex.substring(0, 8),
@@ -487,7 +492,7 @@ export function splitUuids(buffer: Uint8Array): Array<string | null> {
     ];
     const uuid = chunks.join('-');
     if (uuid !== '00000000-0000-0000-0000-000000000000') {
-      uuids.push(uuid);
+      uuids.push(UUID.cast(uuid));
     } else {
       uuids.push(null);
     }

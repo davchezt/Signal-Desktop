@@ -1,4 +1,4 @@
-// Copyright 2020-2021 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import * as React from 'react';
@@ -10,7 +10,8 @@ import { storiesOf } from '@storybook/react';
 
 import { ConversationColors } from '../../types/Colors';
 import { pngUrl } from '../../storybook/Fixtures';
-import { Message, Props as MessagesProps } from './Message';
+import type { Props as MessagesProps } from './Message';
+import { Message, TextDirection } from './Message';
 import {
   AUDIO_MP3,
   IMAGE_PNG,
@@ -18,11 +19,14 @@ import {
   VIDEO_MP4,
   stringToMIMEType,
 } from '../../types/MIME';
-import { Props, Quote } from './Quote';
+import type { Props } from './Quote';
+import { Quote } from './Quote';
 import { ReadStatus } from '../../messages/MessageReadStatus';
 import { setupI18n } from '../../util/setupI18n';
 import enMessages from '../../../_locales/en/messages.json';
 import { getDefaultConversation } from '../../test-both/helpers/getDefaultConversation';
+import { WidthBreakpoint } from '../_util';
+import { ThemeType } from '../../types/Util';
 
 const i18n = setupI18n('en', enMessages);
 
@@ -33,12 +37,16 @@ const defaultMessageProps: MessagesProps = {
     id: 'some-id',
     title: 'Person X',
   }),
+  canReact: true,
   canReply: true,
+  canRetry: true,
+  canRetryDeleteForEveryone: true,
   canDeleteForEveryone: true,
   canDownload: true,
   checkForAccount: action('checkForAccount'),
   clearSelectedMessage: action('default--clearSelectedMessage'),
   containerElementRef: React.createRef<HTMLElement>(),
+  containerWidthBreakpoint: WidthBreakpoint.Wide,
   conversationColor: 'crimson',
   conversationId: 'conversationId',
   conversationType: 'direct', // override
@@ -50,6 +58,7 @@ const defaultMessageProps: MessagesProps = {
   doubleCheckMissingQuoteReference: action(
     'default--doubleCheckMissingQuoteReference'
   ),
+  getPreferredBadge: () => undefined,
   i18n,
   id: 'messageId',
   renderingContext: 'storybook',
@@ -59,7 +68,7 @@ const defaultMessageProps: MessagesProps = {
   kickOffAttachmentDownload: action('default--kickOffAttachmentDownload'),
   markAttachmentAsCorrupted: action('default--markAttachmentAsCorrupted'),
   markViewed: action('default--markViewed'),
-  onHeightChange: action('onHeightChange'),
+  messageExpanded: action('default--message-expanded'),
   openConversation: action('default--openConversation'),
   openLink: action('default--openLink'),
   previews: [],
@@ -70,8 +79,12 @@ const defaultMessageProps: MessagesProps = {
   renderAudioAttachment: () => <div>*AudioAttachment*</div>,
   replyToMessage: action('default--replyToMessage'),
   retrySend: action('default--retrySend'),
+  retryDeleteForEveryone: action('default--retryDeleteForEveryone'),
   scrollToQuotedMessage: action('default--scrollToQuotedMessage'),
   selectMessage: action('default--selectMessage'),
+  shouldCollapseAbove: false,
+  shouldCollapseBelow: false,
+  shouldHideMetadata: false,
   showContactDetail: action('default--showContactDetail'),
   showContactModal: action('default--showContactModal'),
   showExpiredIncomingTapToViewToast: action(
@@ -83,8 +96,11 @@ const defaultMessageProps: MessagesProps = {
   showForwardMessageModal: action('default--showForwardMessageModal'),
   showMessageDetail: action('default--showMessageDetail'),
   showVisualAttachment: action('default--showVisualAttachment'),
+  startConversation: action('default--startConversation'),
   status: 'sent',
   text: 'This is really interesting.',
+  textDirection: TextDirection.Default,
+  theme: ThemeType.light,
   timestamp: Date.now(),
 };
 
@@ -145,10 +161,6 @@ const createProps = (overrideProps: Partial<Props> = {}): Props => ({
       ? overrideProps.text
       : 'A sample message from a pal'
   ),
-  withContentAbove: boolean(
-    'withContentAbove',
-    overrideProps.withContentAbove || false
-  ),
 });
 
 story.add('Outgoing by Another Author', () => {
@@ -196,19 +208,6 @@ story.add('Incoming/Outgoing Colors', () => {
   );
 });
 
-story.add('Content Above', () => {
-  const props = createProps({
-    withContentAbove: true,
-  });
-
-  return (
-    <>
-      <div>Content Above</div>
-      <Quote {...props} />
-    </>
-  );
-});
-
 story.add('Image Only', () => {
   const props = createProps({
     text: '',
@@ -218,6 +217,9 @@ story.add('Image Only', () => {
       isVoiceMessage: false,
       thumbnail: {
         contentType: IMAGE_PNG,
+        height: 100,
+        width: 100,
+        path: pngUrl,
         objectUrl: pngUrl,
       },
     },
@@ -233,6 +235,9 @@ story.add('Image Attachment', () => {
       isVoiceMessage: false,
       thumbnail: {
         contentType: IMAGE_PNG,
+        height: 100,
+        width: 100,
+        path: pngUrl,
         objectUrl: pngUrl,
       },
     },
@@ -275,6 +280,9 @@ story.add('Video Only', () => {
       isVoiceMessage: false,
       thumbnail: {
         contentType: IMAGE_PNG,
+        height: 100,
+        width: 100,
+        path: pngUrl,
         objectUrl: pngUrl,
       },
     },
@@ -293,6 +301,9 @@ story.add('Video Attachment', () => {
       isVoiceMessage: false,
       thumbnail: {
         contentType: IMAGE_PNG,
+        height: 100,
+        width: 100,
+        path: pngUrl,
         objectUrl: pngUrl,
       },
     },

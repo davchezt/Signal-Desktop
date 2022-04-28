@@ -1,31 +1,31 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { ThunkAction } from 'redux-thunk';
+import type { ThunkAction } from 'redux-thunk';
 
 import * as log from '../../logging/log';
-import { NoopActionType } from './noop';
-import { StateType as RootStateType } from '../reducer';
-import { AttachmentType } from '../../types/Attachment';
-import { MessageAttributesType } from '../../model-types.d';
-import { LinkPreviewWithDomain } from '../../types/LinkPreview';
+import type { NoopActionType } from './noop';
+import type { StateType as RootStateType } from '../reducer';
+import type {
+  AttachmentDraftType,
+  InMemoryAttachmentDraftType,
+} from '../../types/Attachment';
+import type { MessageAttributesType } from '../../model-types.d';
+import type { LinkPreviewWithDomain } from '../../types/LinkPreview';
 import { assignWithNoUnnecessaryAllocation } from '../../util/assignWithNoUnnecessaryAllocation';
-import {
-  REMOVE_PREVIEW as REMOVE_LINK_PREVIEW,
-  RemoveLinkPreviewActionType,
-} from './linkPreviews';
+import type { RemoveLinkPreviewActionType } from './linkPreviews';
+import { REMOVE_PREVIEW as REMOVE_LINK_PREVIEW } from './linkPreviews';
 import { writeDraftAttachment } from '../../util/writeDraftAttachment';
+import { deleteDraftAttachment } from '../../util/deleteDraftAttachment';
 import { replaceIndex } from '../../util/replaceIndex';
-import { resolveAttachmentOnDisk } from '../../util/resolveAttachmentOnDisk';
-import {
-  handleAttachmentsProcessing,
-  HandleAttachmentsProcessingArgsType,
-} from '../../util/handleAttachmentsProcessing';
+import { resolveDraftAttachmentOnDisk } from '../../util/resolveDraftAttachmentOnDisk';
+import type { HandleAttachmentsProcessingArgsType } from '../../util/handleAttachmentsProcessing';
+import { handleAttachmentsProcessing } from '../../util/handleAttachmentsProcessing';
 
 // State
 
 export type ComposerStateType = {
-  attachments: ReadonlyArray<AttachmentType>;
+  attachments: ReadonlyArray<AttachmentDraftType>;
   linkPreviewLoading: boolean;
   linkPreviewResult?: LinkPreviewWithDomain;
   quotedMessage?: Pick<MessageAttributesType, 'conversationId' | 'quote'>;
@@ -43,12 +43,12 @@ const SET_QUOTED_MESSAGE = 'composer/SET_QUOTED_MESSAGE';
 
 type AddPendingAttachmentActionType = {
   type: typeof ADD_PENDING_ATTACHMENT;
-  payload: AttachmentType;
+  payload: AttachmentDraftType;
 };
 
 type ReplaceAttachmentsActionType = {
   type: typeof REPLACE_ATTACHMENTS;
-  payload: ReadonlyArray<AttachmentType>;
+  payload: ReadonlyArray<AttachmentDraftType>;
 };
 
 type ResetComposerActionType = {
@@ -102,16 +102,20 @@ export const actions = {
 // next in-memory store.
 function getAttachmentsFromConversationModel(
   conversationId: string
-): Array<AttachmentType> {
+): Array<AttachmentDraftType> {
   const conversation = window.ConversationController.get(conversationId);
   return conversation?.get('draftAttachments') || [];
 }
 
 function addAttachment(
   conversationId: string,
-  attachment: AttachmentType
+  attachment: InMemoryAttachmentDraftType
 ): ThunkAction<void, RootStateType, unknown, ReplaceAttachmentsActionType> {
   return async (dispatch, getState) => {
+    // We do async operations first so multiple in-process addAttachments don't stomp on
+    //   each other.
+    const onDisk = await writeDraftAttachment(attachment);
+
     const isSelectedConversation =
       getState().conversations.selectedConversationId === conversationId;
 
@@ -119,17 +123,17 @@ function addAttachment(
       ? getState().composer.attachments
       : getAttachmentsFromConversationModel(conversationId);
 
+    // We expect there to either be a pending draft attachment or an existing
+    // attachment that we'll be replacing.
     const hasDraftAttachmentPending = draftAttachments.some(
-      draftAttachment =>
-        draftAttachment.pending && draftAttachment.path === attachment.path
+      draftAttachment => draftAttachment.path === attachment.path
     );
 
     // User has canceled the draft so we don't need to continue processing
     if (!hasDraftAttachmentPending) {
+      await deleteDraftAttachment(onDisk);
       return;
     }
-
-    const onDisk = await writeDraftAttachment(attachment);
 
     // Remove any pending attachments that were transcoding
     const index = draftAttachments.findIndex(
@@ -161,7 +165,7 @@ function addAttachment(
 
 function addPendingAttachment(
   conversationId: string,
-  pendingAttachment: AttachmentType
+  pendingAttachment: AttachmentDraftType
 ): ThunkAction<void, RootStateType, unknown, ReplaceAttachmentsActionType> {
   return (dispatch, getState) => {
     const isSelectedConversation =
@@ -202,8 +206,15 @@ function removeAttachment(
   conversationId: string,
   filePath: string
 ): ThunkAction<void, RootStateType, unknown, ReplaceAttachmentsActionType> {
-  return (dispatch, getState) => {
+  return async (dispatch, getState) => {
     const { attachments } = getState().composer;
+
+    const [targetAttachment] = attachments.filter(
+      attachment => attachment.path === filePath
+    );
+    if (!targetAttachment) {
+      return;
+    }
 
     const nextAttachments = attachments.filter(
       attachment => attachment.path !== filePath
@@ -221,12 +232,19 @@ function removeAttachment(
       getState,
       null
     );
+
+    if (
+      targetAttachment.path &&
+      targetAttachment.fileName !== targetAttachment.path
+    ) {
+      await deleteDraftAttachment(targetAttachment);
+    }
   };
 }
 
 function replaceAttachments(
   conversationId: string,
-  attachments: ReadonlyArray<AttachmentType>
+  attachments: ReadonlyArray<AttachmentDraftType>
 ): ThunkAction<void, RootStateType, unknown, ReplaceAttachmentsActionType> {
   return (dispatch, getState) => {
     // If the call came from a conversation we are no longer in we do not
@@ -237,7 +255,7 @@ function replaceAttachments(
 
     dispatch({
       type: REPLACE_ATTACHMENTS,
-      payload: attachments.map(resolveAttachmentOnDisk),
+      payload: attachments.map(resolveDraftAttachmentOnDisk),
     });
   };
 }

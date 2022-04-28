@@ -1,12 +1,16 @@
-// Copyright 2021 Signal Messenger, LLC
+// Copyright 2021-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import type { WebAPIType } from '../textsecure/WebAPI';
 
-import { normalMessageSendJobQueue } from './normalMessageSendJobQueue';
+import { conversationJobQueue } from './conversationJobQueue';
+import { deliveryReceiptsJobQueue } from './deliveryReceiptsJobQueue';
+import { readReceiptsJobQueue } from './readReceiptsJobQueue';
 import { readSyncJobQueue } from './readSyncJobQueue';
 import { removeStorageKeyJobQueue } from './removeStorageKeyJobQueue';
 import { reportSpamJobQueue } from './reportSpamJobQueue';
+import { singleProtoJobQueue } from './singleProtoJobQueue';
+import { viewOnceOpenJobQueue } from './viewOnceOpenJobQueue';
 import { viewSyncJobQueue } from './viewSyncJobQueue';
 import { viewedReceiptsJobQueue } from './viewedReceiptsJobQueue';
 
@@ -20,10 +24,23 @@ export function initializeAllJobQueues({
 }): void {
   reportSpamJobQueue.initialize({ server });
 
-  normalMessageSendJobQueue.streamJobs();
+  // General conversation send queue
+  conversationJobQueue.streamJobs();
+
+  // Single proto send queue, used for a variety of one-off simple messages
+  singleProtoJobQueue.streamJobs();
+
+  // Syncs to others
+  deliveryReceiptsJobQueue.streamJobs();
+  readReceiptsJobQueue.streamJobs();
+  viewedReceiptsJobQueue.streamJobs();
+
+  // Syncs to ourselves
   readSyncJobQueue.streamJobs();
+  viewSyncJobQueue.streamJobs();
+  viewOnceOpenJobQueue.streamJobs();
+
+  // Other queues
   removeStorageKeyJobQueue.streamJobs();
   reportSpamJobQueue.streamJobs();
-  viewSyncJobQueue.streamJobs();
-  viewedReceiptsJobQueue.streamJobs();
 }

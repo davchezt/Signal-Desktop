@@ -1,4 +1,4 @@
-// Copyright 2015-2021 Signal Messenger, LLC
+// Copyright 2015-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -9,21 +9,22 @@ import {
   Direction,
   SenderKeyRecord,
   SessionRecord,
-} from '@signalapp/signal-client';
-import { v4 as getGuid } from 'uuid';
+} from '@signalapp/libsignal-client';
 
 import { signal } from '../protobuf/compiled';
 import { sessionStructureToBytes } from '../util/sessionTranslation';
+import * as durations from '../util/durations';
 import { Zone } from '../util/Zone';
 
 import * as Bytes from '../Bytes';
 import { getRandomBytes, constantTimeEqual } from '../Crypto';
 import { clampPrivateKey, setPublicKeyTypeByte } from '../Curve';
-import { GLOBAL_ZONE, SignalProtocolStore } from '../SignalProtocolStore';
+import type { SignalProtocolStore } from '../SignalProtocolStore';
+import { GLOBAL_ZONE } from '../SignalProtocolStore';
 import { Address } from '../types/Address';
 import { QualifiedAddress } from '../types/QualifiedAddress';
 import { UUID } from '../types/UUID';
-import { IdentityKeyType, KeyPairType } from '../textsecure/Types.d';
+import type { IdentityKeyType, KeyPairType } from '../textsecure/Types.d';
 
 chai.use(chaiAsPromised);
 
@@ -35,8 +36,8 @@ const {
 } = signal.proto.storage;
 
 describe('SignalProtocolStore', () => {
-  const ourUuid = new UUID(getGuid());
-  const theirUuid = new UUID(getGuid());
+  const ourUuid = UUID.generate();
+  const theirUuid = UUID.generate();
   let store: SignalProtocolStore;
   let identityKey: KeyPairType;
   let testKey: KeyPairType;
@@ -169,7 +170,7 @@ describe('SignalProtocolStore', () => {
 
   describe('senderKeys', () => {
     it('roundtrips in memory', async () => {
-      const distributionId = window.getGuid();
+      const distributionId = UUID.generate().toString();
       const expected = getSenderKeyRecord();
 
       const deviceId = 1;
@@ -199,7 +200,7 @@ describe('SignalProtocolStore', () => {
     });
 
     it('roundtrips through database', async () => {
-      const distributionId = window.getGuid();
+      const distributionId = UUID.generate().toString();
       const expected = getSenderKeyRecord();
 
       const deviceId = 1;
@@ -671,7 +672,7 @@ describe('SignalProtocolStore', () => {
       });
     });
   });
-  describe('processContactSyncVerificationState', () => {
+  describe('processVerifiedMessage', () => {
     const newIdentity = getPublicKey();
     let keychangeTriggered: number;
 
@@ -692,8 +693,8 @@ describe('SignalProtocolStore', () => {
           await store.hydrateCaches();
         });
 
-        it('does nothing', async () => {
-          await store.processContactSyncVerificationState(
+        it('sets the identity key', async () => {
+          await store.processVerifiedMessage(
             theirUuid,
             store.VerifiedStatus.DEFAULT,
             newIdentity
@@ -702,15 +703,10 @@ describe('SignalProtocolStore', () => {
           const identity = await window.Signal.Data.getIdentityKeyById(
             theirUuid.toString()
           );
-
-          if (identity) {
-            // fetchRecord resolved so there is a record.
-            // Bad.
-            throw new Error(
-              'processContactSyncVerificationState should not save new records'
-            );
-          }
-
+          assert.isTrue(
+            identity?.publicKey &&
+              constantTimeEqual(identity.publicKey, newIdentity)
+          );
           assert.strictEqual(keychangeTriggered, 0);
         });
       });
@@ -728,8 +724,8 @@ describe('SignalProtocolStore', () => {
             await store.hydrateCaches();
           });
 
-          it('does not save the new identity (because this is a less secure state)', async () => {
-            await store.processContactSyncVerificationState(
+          it('updates the identity', async () => {
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.DEFAULT,
               newIdentity
@@ -742,14 +738,9 @@ describe('SignalProtocolStore', () => {
               throw new Error('Missing identity!');
             }
 
-            assert.strictEqual(
-              identity.verified,
-              store.VerifiedStatus.VERIFIED
-            );
-            assert.isTrue(
-              constantTimeEqual(identity.publicKey, testKey.pubKey)
-            );
-            assert.strictEqual(keychangeTriggered, 0);
+            assert.strictEqual(identity.verified, store.VerifiedStatus.DEFAULT);
+            assert.isTrue(constantTimeEqual(identity.publicKey, newIdentity));
+            assert.strictEqual(keychangeTriggered, 1);
           });
         });
         describe('when the existing key is the same but VERIFIED', () => {
@@ -766,7 +757,7 @@ describe('SignalProtocolStore', () => {
           });
 
           it('updates the verified status', async () => {
-            await store.processContactSyncVerificationState(
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.DEFAULT,
               testKey.pubKey
@@ -800,7 +791,7 @@ describe('SignalProtocolStore', () => {
           });
 
           it('does not hang', async () => {
-            await store.processContactSyncVerificationState(
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.DEFAULT,
               testKey.pubKey
@@ -818,8 +809,8 @@ describe('SignalProtocolStore', () => {
           await store.hydrateCaches();
         });
 
-        it('saves the new identity and marks it verified', async () => {
-          await store.processContactSyncVerificationState(
+        it('saves the new identity and marks it UNVERIFIED', async () => {
+          await store.processVerifiedMessage(
             theirUuid,
             store.VerifiedStatus.UNVERIFIED,
             newIdentity
@@ -855,7 +846,7 @@ describe('SignalProtocolStore', () => {
           });
 
           it('saves the new identity and marks it UNVERIFIED', async () => {
-            await store.processContactSyncVerificationState(
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.UNVERIFIED,
               newIdentity
@@ -890,7 +881,7 @@ describe('SignalProtocolStore', () => {
           });
 
           it('updates the verified status', async () => {
-            await store.processContactSyncVerificationState(
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.UNVERIFIED,
               testKey.pubKey
@@ -926,7 +917,7 @@ describe('SignalProtocolStore', () => {
           });
 
           it('does not hang', async () => {
-            await store.processContactSyncVerificationState(
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.UNVERIFIED,
               testKey.pubKey
@@ -945,7 +936,7 @@ describe('SignalProtocolStore', () => {
         });
 
         it('saves the new identity and marks it verified', async () => {
-          await store.processContactSyncVerificationState(
+          await store.processVerifiedMessage(
             theirUuid,
             store.VerifiedStatus.VERIFIED,
             newIdentity
@@ -977,7 +968,7 @@ describe('SignalProtocolStore', () => {
           });
 
           it('saves the new identity and marks it VERIFIED', async () => {
-            await store.processContactSyncVerificationState(
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.VERIFIED,
               newIdentity
@@ -1012,7 +1003,7 @@ describe('SignalProtocolStore', () => {
           });
 
           it('saves the identity and marks it verified', async () => {
-            await store.processContactSyncVerificationState(
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.VERIFIED,
               testKey.pubKey
@@ -1048,7 +1039,7 @@ describe('SignalProtocolStore', () => {
           });
 
           it('does not hang', async () => {
-            await store.processContactSyncVerificationState(
+            await store.processVerifiedMessage(
               theirUuid,
               store.VerifiedStatus.VERIFIED,
               testKey.pubKey
@@ -1137,16 +1128,9 @@ describe('SignalProtocolStore', () => {
 
     describe('When invalid direction is given', () => {
       it('should fail', async () => {
-        try {
-          await store.isTrustedIdentity(
-            identifier,
-            testKey.pubKey,
-            'dir' as any
-          );
-          throw new Error('isTrustedIdentity should have failed');
-        } catch (error) {
-          // good
-        }
+        await assert.isRejected(
+          store.isTrustedIdentity(identifier, testKey.pubKey, 'dir' as any)
+        );
       });
     });
     describe('When direction is RECEIVING', () => {
@@ -1441,7 +1425,9 @@ describe('SignalProtocolStore', () => {
   });
 
   describe('zones', () => {
+    const distributionId = UUID.generate().toString();
     const zone = new Zone('zone', {
+      pendingSenderKeys: true,
       pendingSessions: true,
       pendingUnprocessed: true,
     });
@@ -1449,6 +1435,7 @@ describe('SignalProtocolStore', () => {
     beforeEach(async () => {
       await store.removeAllUnprocessed();
       await store.removeAllSessions(theirUuid.toString());
+      await store.removeAllSenderKeys();
     });
 
     it('should not store pending sessions in global zone', async () => {
@@ -1466,27 +1453,51 @@ describe('SignalProtocolStore', () => {
       assert.equal(await store.loadSession(id), testRecord);
     });
 
-    it('commits session stores and unprocessed on success', async () => {
+    it('should not store pending sender keys in global zone', async () => {
       const id = new QualifiedAddress(ourUuid, new Address(theirUuid, 1));
-      const testRecord = getSessionRecord();
+      const testRecord = getSenderKeyRecord();
+
+      await assert.isRejected(
+        store.withZone(GLOBAL_ZONE, 'test', async () => {
+          await store.saveSenderKey(id, distributionId, testRecord);
+          throw new Error('Failure');
+        }),
+        'Failure'
+      );
+
+      assert.equal(await store.getSenderKey(id, distributionId), testRecord);
+    });
+
+    it('commits sender keys, sessions and unprocessed on success', async () => {
+      const id = new QualifiedAddress(ourUuid, new Address(theirUuid, 1));
+      const testSession = getSessionRecord();
+      const testSenderKey = getSenderKeyRecord();
 
       await store.withZone(zone, 'test', async () => {
-        await store.storeSession(id, testRecord, { zone });
+        await store.storeSession(id, testSession, { zone });
+        await store.saveSenderKey(id, distributionId, testSenderKey, { zone });
 
         await store.addUnprocessed(
           {
             id: '2-two',
             envelope: 'second',
-            timestamp: 2,
+            timestamp: Date.now() + 2,
+            receivedAtCounter: 0,
             version: 2,
             attempts: 0,
           },
           { zone }
         );
-        assert.equal(await store.loadSession(id, { zone }), testRecord);
+
+        assert.equal(await store.loadSession(id, { zone }), testSession);
+        assert.equal(
+          await store.getSenderKey(id, distributionId, { zone }),
+          testSenderKey
+        );
       });
 
-      assert.equal(await store.loadSession(id), testRecord);
+      assert.equal(await store.loadSession(id), testSession);
+      assert.equal(await store.getSenderKey(id, distributionId), testSenderKey);
 
       const allUnprocessed = await store.getAllUnprocessed();
       assert.deepEqual(
@@ -1495,24 +1506,38 @@ describe('SignalProtocolStore', () => {
       );
     });
 
-    it('reverts session stores and unprocessed on error', async () => {
+    it('reverts sender keys, sessions and unprocessed on error', async () => {
       const id = new QualifiedAddress(ourUuid, new Address(theirUuid, 1));
-      const testRecord = getSessionRecord();
-      const failedRecord = getSessionRecord();
+      const testSession = getSessionRecord();
+      const failedSession = getSessionRecord();
+      const testSenderKey = getSenderKeyRecord();
+      const failedSenderKey = getSenderKeyRecord();
 
-      await store.storeSession(id, testRecord);
-      assert.equal(await store.loadSession(id), testRecord);
+      await store.storeSession(id, testSession);
+      assert.equal(await store.loadSession(id), testSession);
+
+      await store.saveSenderKey(id, distributionId, testSenderKey);
+      assert.equal(await store.getSenderKey(id, distributionId), testSenderKey);
 
       await assert.isRejected(
         store.withZone(zone, 'test', async () => {
-          await store.storeSession(id, failedRecord, { zone });
-          assert.equal(await store.loadSession(id, { zone }), failedRecord);
+          await store.storeSession(id, failedSession, { zone });
+          assert.equal(await store.loadSession(id, { zone }), failedSession);
+
+          await store.saveSenderKey(id, distributionId, failedSenderKey, {
+            zone,
+          });
+          assert.equal(
+            await store.getSenderKey(id, distributionId, { zone }),
+            failedSenderKey
+          );
 
           await store.addUnprocessed(
             {
               id: '2-two',
               envelope: 'second',
               timestamp: 2,
+              receivedAtCounter: 0,
               version: 2,
               attempts: 0,
             },
@@ -1524,7 +1549,8 @@ describe('SignalProtocolStore', () => {
         'Failure'
       );
 
-      assert.equal(await store.loadSession(id), testRecord);
+      assert.equal(await store.loadSession(id), testSession);
+      assert.equal(await store.getSenderKey(id, distributionId), testSenderKey);
       assert.deepEqual(await store.getAllUnprocessed(), []);
     });
 
@@ -1617,6 +1643,8 @@ describe('SignalProtocolStore', () => {
   });
 
   describe('Not yet processed messages', () => {
+    const NOW = Date.now();
+
     beforeEach(async () => {
       await store.removeAllUnprocessed();
       const items = await store.getAllUnprocessed();
@@ -1626,23 +1654,34 @@ describe('SignalProtocolStore', () => {
     it('adds three and gets them back', async () => {
       await Promise.all([
         store.addUnprocessed({
+          id: '0-dropped',
+          envelope: 'old envelope',
+          timestamp: NOW - 2 * durations.MONTH,
+          receivedAtCounter: 0,
+          version: 2,
+          attempts: 0,
+        }),
+        store.addUnprocessed({
           id: '2-two',
           envelope: 'second',
-          timestamp: 2,
+          timestamp: NOW + 2,
+          receivedAtCounter: 0,
           version: 2,
           attempts: 0,
         }),
         store.addUnprocessed({
           id: '3-three',
           envelope: 'third',
-          timestamp: 3,
+          timestamp: NOW + 3,
+          receivedAtCounter: 0,
           version: 2,
           attempts: 0,
         }),
         store.addUnprocessed({
           id: '1-one',
           envelope: 'first',
-          timestamp: 1,
+          timestamp: NOW + 1,
+          receivedAtCounter: 0,
           version: 2,
           attempts: 0,
         }),
@@ -1662,7 +1701,8 @@ describe('SignalProtocolStore', () => {
       await store.addUnprocessed({
         id,
         envelope: 'first',
-        timestamp: 1,
+        timestamp: NOW + 1,
+        receivedAtCounter: 0,
         version: 2,
         attempts: 0,
       });
@@ -1671,7 +1711,7 @@ describe('SignalProtocolStore', () => {
       const items = await store.getAllUnprocessed();
       assert.strictEqual(items.length, 1);
       assert.strictEqual(items[0].decrypted, 'updated');
-      assert.strictEqual(items[0].timestamp, 1);
+      assert.strictEqual(items[0].timestamp, NOW + 1);
     });
 
     it('removeUnprocessed successfully deletes item', async () => {
@@ -1679,7 +1719,8 @@ describe('SignalProtocolStore', () => {
       await store.addUnprocessed({
         id,
         envelope: 'first',
-        timestamp: 1,
+        timestamp: NOW + 1,
+        receivedAtCounter: 0,
         version: 2,
         attempts: 0,
       });

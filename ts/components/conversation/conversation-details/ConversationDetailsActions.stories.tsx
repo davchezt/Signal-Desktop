@@ -9,10 +9,8 @@ import { action } from '@storybook/addon-actions';
 
 import { setupI18n } from '../../../util/setupI18n';
 import enMessages from '../../../../_locales/en/messages.json';
-import {
-  ConversationDetailsActions,
-  Props,
-} from './ConversationDetailsActions';
+import type { Props } from './ConversationDetailsActions';
+import { ConversationDetailsActions } from './ConversationDetailsActions';
 
 const i18n = setupI18n('en', enMessages);
 
@@ -31,7 +29,10 @@ const createProps = (overrideProps: Partial<Props> = {}): Props => ({
   left: isBoolean(overrideProps.left) ? overrideProps.left : false,
   onBlock: action('onBlock'),
   onLeave: action('onLeave'),
+  onUnblock: action('onUnblock'),
   i18n,
+  isBlocked: false,
+  isGroup: true,
 });
 
 story.add('Basic', () => {
@@ -51,3 +52,11 @@ story.add('Cannot leave because you are the last admin', () => {
 
   return <ConversationDetailsActions {...props} />;
 });
+
+story.add('1:1', () => (
+  <ConversationDetailsActions {...createProps()} isGroup={false} />
+));
+
+story.add('1:1 Blocked', () => (
+  <ConversationDetailsActions {...createProps()} isGroup={false} isBlocked />
+));

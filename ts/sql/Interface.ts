@@ -6,21 +6,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type {
   ConversationAttributesType,
-  ConversationModelCollectionType,
   MessageAttributesType,
-  MessageModelCollectionType,
+  SenderKeyInfoType,
 } from '../model-types.d';
-import type { MessageModel } from '../models/messages';
-import type { ConversationModel } from '../models/conversations';
 import type { StoredJob } from '../jobs/types';
 import type { ReactionType } from '../types/Reactions';
 import type { ConversationColorType, CustomColorType } from '../types/Colors';
 import type { ProcessGroupCallRingRequestResult } from '../types/Calling';
-import { StorageAccessType } from '../types/Storage.d';
+import type { StorageAccessType } from '../types/Storage.d';
 import type { AttachmentType } from '../types/Attachment';
-import { BodyRangesType } from '../types/Util';
+import type { BodyRangesType } from '../types/Util';
 import type { QualifiedAddressStringType } from '../types/QualifiedAddress';
 import type { UUIDStringType } from '../types/UUID';
+import type { BadgeType } from '../badges/types';
 import type { RemoveAllConfiguration } from '../types/RemoveAllConfiguration';
 import type { LoggerType } from '../types/Logging';
 
@@ -52,8 +50,8 @@ export type MessageMetricsType = {
 export type ConversationMetricsType = {
   oldest?: MessageMetricsType;
   newest?: MessageMetricsType;
-  oldestUnread?: MessageMetricsType;
-  totalUnread: number;
+  oldestUnseen?: MessageMetricsType;
+  totalUnseen: number;
 };
 export type ConversationType = ConversationAttributesType;
 export type EmojiType = {
@@ -63,7 +61,7 @@ export type EmojiType = {
 
 export type IdentityKeyType = {
   firstUse: boolean;
-  id: UUIDStringType | `conversation:${UUIDStringType}`;
+  id: UUIDStringType | `conversation:${string}`;
   nonblockingApproval: boolean;
   publicKey: Uint8Array;
   timestamp: number;
@@ -89,7 +87,7 @@ export type PreKeyType = {
   publicKey: Uint8Array;
 };
 export type PreKeyIdType = PreKeyType['id'];
-export type SearchResultMessageType = {
+export type ServerSearchResultMessageType = {
   json: string;
   snippet: string;
 };
@@ -198,6 +196,7 @@ export type StickerPackType = Readonly<{
 export type UnprocessedType = {
   id: string;
   timestamp: number;
+  receivedAtCounter: number | null;
   version: number;
   attempts: number;
   envelope?: string;
@@ -205,6 +204,7 @@ export type UnprocessedType = {
   source?: string;
   sourceUuid?: string;
   sourceDevice?: number;
+  destinationUuid?: string;
   serverGuid?: string;
   serverTimestamp?: number;
   decrypted?: string;
@@ -219,15 +219,9 @@ export type UnprocessedUpdateType = {
   decrypted?: string;
 };
 
-export type LastConversationMessagesServerType = {
+export type ConversationMessageStatsType = {
   activity?: MessageType;
   preview?: MessageType;
-  hasUserInitiatedMessages: boolean;
-};
-
-export type LastConversationMessagesType = {
-  activity?: MessageModel;
-  preview?: MessageModel;
   hasUserInitiatedMessages: boolean;
 };
 
@@ -235,6 +229,31 @@ export type DeleteSentProtoRecipientOptionsType = Readonly<{
   timestamp: number;
   recipientUuid: string;
   deviceId: number;
+}>;
+
+export type StoryDistributionType = Readonly<{
+  id: UUIDStringType;
+  name: string;
+
+  avatarUrlPath: string;
+  avatarKey: Uint8Array;
+  senderKeyInfo: SenderKeyInfoType | undefined;
+}>;
+export type StoryDistributionMemberType = Readonly<{
+  listId: UUIDStringType;
+  uuid: UUIDStringType;
+}>;
+export type StoryDistributionWithMembersType = Readonly<
+  {
+    members: Array<UUIDStringType>;
+  } & StoryDistributionType
+>;
+
+export type StoryReadType = Readonly<{
+  authorId: UUIDStringType;
+  conversationId: UUIDStringType;
+  storyId: UUIDStringType;
+  storyReadDate: number;
 }>;
 
 export type DataInterface = {
@@ -311,7 +330,8 @@ export type DataInterface = {
 
   createOrUpdateSession: (data: SessionType) => Promise<void>;
   createOrUpdateSessions: (array: Array<SessionType>) => Promise<void>;
-  commitSessionsAndUnprocessed(options: {
+  commitDecryptResult(options: {
+    senderKeys: Array<SenderKeyType>;
     sessions: Array<SessionType>;
     unprocessed: Array<UnprocessedType>;
   }): Promise<void>;
@@ -325,55 +345,66 @@ export type DataInterface = {
   getConversationCount: () => Promise<number>;
   saveConversation: (data: ConversationType) => Promise<void>;
   saveConversations: (array: Array<ConversationType>) => Promise<void>;
+  getConversationById: (id: string) => Promise<ConversationType | undefined>;
+  // updateConversation is a normal data method on Server, a sync batch-add on Client
   updateConversations: (array: Array<ConversationType>) => Promise<void>;
-  getAllConversationIds: () => Promise<Array<string>>;
+  // removeConversation handles either one id or an array on Server, and one id on Client
+  updateAllConversationColors: (
+    conversationColor?: ConversationColorType,
+    customColorData?: {
+      id: string;
+      value: CustomColorType;
+    }
+  ) => Promise<void>;
 
-  searchConversations: (
-    query: string,
-    options?: { limit?: number }
+  getAllConversations: () => Promise<Array<ConversationType>>;
+  getAllConversationIds: () => Promise<Array<string>>;
+  getAllGroupsInvolvingUuid: (
+    id: UUIDStringType
   ) => Promise<Array<ConversationType>>;
 
-  getMessagesById: (messageIds: Array<string>) => Promise<Array<MessageType>>;
+  // searchMessages is JSON on server, full message on Client
+  // searchMessagesInConversation is JSON on server, full message on Client
+
+  getMessageCount: (conversationId?: string) => Promise<number>;
+  getStoryCount: (conversationId: string) => Promise<number>;
   saveMessage: (
     data: MessageType,
-    options?: {
+    options: {
       jobToInsert?: StoredJob;
       forceSave?: boolean;
+      ourUuid: UUIDStringType;
     }
   ) => Promise<string>;
   saveMessages: (
-    arrayOfMessages: Array<MessageType>,
-    options?: { forceSave?: boolean }
+    arrayOfMessages: ReadonlyArray<MessageType>,
+    options: { forceSave?: boolean; ourUuid: UUIDStringType }
   ) => Promise<void>;
-  getMessageCount: (conversationId?: string) => Promise<number>;
-  getAllMessageIds: () => Promise<Array<string>>;
-  getMessageMetricsForConversation: (
-    conversationId: string
-  ) => Promise<ConversationMetricsType>;
-  hasGroupCallHistoryMessage: (
+  removeMessage: (id: string) => Promise<void>;
+  removeMessages: (ids: Array<string>) => Promise<void>;
+  getTotalUnreadForConversation: (
     conversationId: string,
-    eraId: string
-  ) => Promise<boolean>;
-  migrateConversationMessages: (
-    obsoleteId: string,
-    currentId: string
-  ) => Promise<void>;
-  getNextTapToViewMessageTimestampToAgeOut: () => Promise<undefined | number>;
-
-  getUnreadCountForConversation: (conversationId: string) => Promise<number>;
-  getUnreadByConversationAndMarkRead: (
-    conversationId: string,
-    newestUnreadId: number,
-    readAt?: number
-  ) => Promise<
+    options: {
+      storyId: UUIDStringType | undefined;
+      isGroup: boolean;
+    }
+  ) => Promise<number>;
+  getUnreadByConversationAndMarkRead: (options: {
+    conversationId: string;
+    isGroup?: boolean;
+    newestUnreadAt: number;
+    readAt?: number;
+    storyId?: UUIDStringType;
+  }) => Promise<
     Array<
       Pick<MessageType, 'id' | 'source' | 'sourceUuid' | 'sent_at' | 'type'>
     >
   >;
-  getUnreadReactionsAndMarkRead: (
-    conversationId: string,
-    newestUnreadId: number
-  ) => Promise<
+  getUnreadReactionsAndMarkRead: (options: {
+    conversationId: string;
+    newestUnreadAt: number;
+    storyId?: UUIDStringType;
+  }) => Promise<
     Array<
       Pick<ReactionType, 'targetAuthorUuid' | 'targetTimestamp' | 'messageId'>
     >
@@ -389,6 +420,58 @@ export type DataInterface = {
     targetTimestamp: number;
   }) => Promise<void>;
   addReaction: (reactionObj: ReactionType) => Promise<void>;
+  _getAllReactions: () => Promise<Array<ReactionType>>;
+  _removeAllReactions: () => Promise<void>;
+  getMessageBySender: (options: {
+    source: string;
+    sourceUuid: string;
+    sourceDevice: number;
+    sent_at: number;
+  }) => Promise<MessageType | undefined>;
+  getMessageById: (id: string) => Promise<MessageType | undefined>;
+  getMessagesById: (messageIds: Array<string>) => Promise<Array<MessageType>>;
+  _getAllMessages: () => Promise<Array<MessageType>>;
+  _removeAllMessages: () => Promise<void>;
+  getAllMessageIds: () => Promise<Array<string>>;
+  getMessagesBySentAt: (sentAt: number) => Promise<Array<MessageType>>;
+  getExpiredMessages: () => Promise<Array<MessageType>>;
+  getMessagesUnexpectedlyMissingExpirationStartTimestamp: () => Promise<
+    Array<MessageType>
+  >;
+  getSoonestMessageExpiry: () => Promise<undefined | number>;
+  getNextTapToViewMessageTimestampToAgeOut: () => Promise<undefined | number>;
+  getTapToViewMessagesNeedingErase: () => Promise<Array<MessageType>>;
+  // getOlderMessagesByConversation is JSON on server, full message on Client
+  getOlderStories: (options: {
+    conversationId?: string;
+    limit?: number;
+    receivedAt?: number;
+    sentAt?: number;
+    sourceUuid?: string;
+  }) => Promise<Array<MessageType>>;
+  // getNewerMessagesByConversation is JSON on server, full message on Client
+  getMessageMetricsForConversation: (
+    conversationId: string,
+    storyId?: UUIDStringType,
+    isGroup?: boolean
+  ) => Promise<ConversationMetricsType>;
+  // getConversationRangeCenteredOnMessage is JSON on server, full message on client
+  getConversationMessageStats: (options: {
+    conversationId: string;
+    isGroup?: boolean;
+    ourUuid: UUIDStringType;
+  }) => Promise<ConversationMessageStatsType>;
+  getLastConversationMessage(options: {
+    conversationId: string;
+  }): Promise<MessageType | undefined>;
+  hasGroupCallHistoryMessage: (
+    conversationId: string,
+    eraId: string
+  ) => Promise<boolean>;
+  migrateConversationMessages: (
+    obsoleteId: string,
+    currentId: string
+  ) => Promise<void>;
 
   getUnprocessedCount: () => Promise<number>;
   getAllUnprocessed: () => Promise<Array<UnprocessedType>>;
@@ -408,11 +491,11 @@ export type DataInterface = {
     options?: { timestamp?: number }
   ) => Promise<Array<AttachmentDownloadJobType>>;
   saveAttachmentDownloadJob: (job: AttachmentDownloadJobType) => Promise<void>;
+  resetAttachmentDownloadPending: () => Promise<void>;
   setAttachmentDownloadJobPending: (
     id: string,
     pending: boolean
   ) => Promise<void>;
-  resetAttachmentDownloadPending: () => Promise<void>;
   removeAttachmentDownloadJob: (id: string) => Promise<void>;
   removeAllAttachmentDownloadJobs: () => Promise<void>;
 
@@ -445,6 +528,44 @@ export type DataInterface = {
   updateEmojiUsage: (shortName: string, timeUsed?: number) => Promise<void>;
   getRecentEmojis: (limit?: number) => Promise<Array<EmojiType>>;
 
+  getAllBadges(): Promise<Array<BadgeType>>;
+  updateOrCreateBadges(badges: ReadonlyArray<BadgeType>): Promise<void>;
+  badgeImageFileDownloaded(url: string, localPath: string): Promise<void>;
+
+  _getAllStoryDistributions(): Promise<Array<StoryDistributionType>>;
+  _getAllStoryDistributionMembers(): Promise<
+    Array<StoryDistributionMemberType>
+  >;
+  _deleteAllStoryDistributions(): Promise<void>;
+  createNewStoryDistribution(
+    distribution: StoryDistributionWithMembersType
+  ): Promise<void>;
+  getAllStoryDistributionsWithMembers(): Promise<
+    Array<StoryDistributionWithMembersType>
+  >;
+  getStoryDistributionWithMembers(
+    id: string
+  ): Promise<StoryDistributionWithMembersType | undefined>;
+  modifyStoryDistribution(distribution: StoryDistributionType): Promise<void>;
+  modifyStoryDistributionMembers(
+    id: string,
+    options: {
+      toAdd: Array<UUIDStringType>;
+      toRemove: Array<UUIDStringType>;
+    }
+  ): Promise<void>;
+  deleteStoryDistribution(id: UUIDStringType): Promise<void>;
+
+  _getAllStoryReads(): Promise<Array<StoryReadType>>;
+  _deleteAllStoryReads(): Promise<void>;
+  addNewStoryRead(read: StoryReadType): Promise<void>;
+  getLastStoryReadsForAuthor(options: {
+    authorId: UUIDStringType;
+    conversationId?: UUIDStringType;
+    limit?: number;
+  }): Promise<Array<StoryReadType>>;
+  countStoryReadsByConversation(conversationId: string): Promise<number>;
+
   removeAll: () => Promise<void>;
   removeAllConfiguration: (type?: RemoveAllConfiguration) => Promise<void>;
 
@@ -463,10 +584,6 @@ export type DataInterface = {
   getMessageServerGuidsForSpam: (
     conversationId: string
   ) => Promise<Array<string>>;
-  getMessagesUnexpectedlyMissingExpirationStartTimestamp: () => Promise<
-    Array<MessageType>
-  >;
-  getSoonestMessageExpiry: () => Promise<undefined | number>;
 
   getJobsInQueue(queueType: string): Promise<Array<StoredJob>>;
   insertJob(job: Readonly<StoredJob>): Promise<void>;
@@ -478,74 +595,60 @@ export type DataInterface = {
   processGroupCallRingCancelation(ringId: bigint): Promise<void>;
   cleanExpiredGroupCallRings(): Promise<void>;
 
-  updateAllConversationColors: (
-    conversationColor?: ConversationColorType,
-    customColorData?: {
-      id: string;
-      value: CustomColorType;
-    }
-  ) => Promise<void>;
-
   getMaxMessageCounter(): Promise<number | undefined>;
+
   getStatisticsForLogging(): Promise<Record<string, string>>;
 };
 
-// The reason for client/server divergence is the need to inject Backbone models and
-//   collections into data calls so those are the objects returned. This was necessary in
-//   July 2018 when creating the Data API as a drop-in replacement for previous database
-//   requests via ORM.
-
-// Note: It is extremely important that items are duplicated between these two. Client.js
-//   loops over all of its local functions to generate the server-side IPC-based API.
-
 export type ServerInterface = DataInterface & {
-  getAllConversations: () => Promise<Array<ConversationType>>;
-  getAllGroupsInvolvingId: (id: string) => Promise<Array<ConversationType>>;
-  getAllPrivateConversations: () => Promise<Array<ConversationType>>;
-  getConversationById: (id: string) => Promise<ConversationType | undefined>;
-  getExpiredMessages: () => Promise<Array<MessageType>>;
-  getMessageById: (id: string) => Promise<MessageType | undefined>;
-  getMessageBySender: (options: {
-    source: string;
-    sourceUuid: string;
-    sourceDevice: number;
-    sent_at: number;
-  }) => Promise<Array<MessageType>>;
-  getMessagesBySentAt: (sentAt: number) => Promise<Array<MessageType>>;
-  getOlderMessagesByConversation: (
-    conversationId: string,
-    options?: {
-      limit?: number;
-      receivedAt?: number;
-      sentAt?: number;
-      messageId?: string;
-    }
-  ) => Promise<Array<MessageTypeUnhydrated>>;
-  getNewerMessagesByConversation: (
-    conversationId: string,
-    options?: { limit?: number; receivedAt?: number; sentAt?: number }
-  ) => Promise<Array<MessageTypeUnhydrated>>;
-  getLastConversationMessages: (options: {
-    conversationId: string;
-    ourConversationId: string;
-  }) => Promise<LastConversationMessagesServerType>;
-  getTapToViewMessagesNeedingErase: () => Promise<Array<MessageType>>;
+  // Differing signature on client/server
+
+  updateConversation: (data: ConversationType) => Promise<void>;
   removeConversation: (id: Array<string> | string) => Promise<void>;
-  removeMessage: (id: string) => Promise<void>;
-  removeMessages: (ids: Array<string>) => Promise<void>;
+
   searchMessages: (
     query: string,
     options?: { limit?: number }
-  ) => Promise<Array<SearchResultMessageType>>;
+  ) => Promise<Array<ServerSearchResultMessageType>>;
   searchMessagesInConversation: (
     query: string,
     conversationId: string,
     options?: { limit?: number }
-  ) => Promise<Array<SearchResultMessageType>>;
-  updateConversation: (data: ConversationType) => Promise<void>;
+  ) => Promise<Array<ServerSearchResultMessageType>>;
 
-  // For testing only
-  _getAllMessages: () => Promise<Array<MessageType>>;
+  getOlderMessagesByConversation: (
+    conversationId: string,
+    options?: {
+      isGroup?: boolean;
+      limit?: number;
+      messageId?: string;
+      receivedAt?: number;
+      sentAt?: number;
+      storyId?: string;
+    }
+  ) => Promise<Array<MessageTypeUnhydrated>>;
+  getNewerMessagesByConversation: (
+    conversationId: string,
+    options?: {
+      isGroup?: boolean;
+      limit?: number;
+      receivedAt?: number;
+      sentAt?: number;
+      storyId?: UUIDStringType;
+    }
+  ) => Promise<Array<MessageTypeUnhydrated>>;
+  getConversationRangeCenteredOnMessage: (options: {
+    conversationId: string;
+    limit?: number;
+    messageId: string;
+    receivedAt: number;
+    sentAt?: number;
+    storyId?: UUIDStringType;
+  }) => Promise<{
+    older: Array<MessageTypeUnhydrated>;
+    newer: Array<MessageTypeUnhydrated>;
+    metrics: ConversationMetricsType;
+  }>;
 
   // Server-only
 
@@ -554,7 +657,6 @@ export type ServerInterface = DataInterface & {
     key: string;
     logger: LoggerType;
   }) => Promise<void>;
-
   initializeRenderer: (options: {
     configDir: string;
     key: string;
@@ -567,84 +669,15 @@ export type ServerInterface = DataInterface & {
   removeKnownDraftAttachments: (
     allStickers: Array<string>
   ) => Promise<Array<string>>;
+  getAllBadgeImageFileLocalPaths: () => Promise<Set<string>>;
 };
 
 export type ClientInterface = DataInterface & {
-  getAllConversations: (options: {
-    ConversationCollection: typeof ConversationModelCollectionType;
-  }) => Promise<ConversationModelCollectionType>;
-  getAllGroupsInvolvingId: (
-    id: string,
-    options: {
-      ConversationCollection: typeof ConversationModelCollectionType;
-    }
-  ) => Promise<ConversationModelCollectionType>;
-  getAllPrivateConversations: (options: {
-    ConversationCollection: typeof ConversationModelCollectionType;
-  }) => Promise<ConversationModelCollectionType>;
-  getConversationById: (
-    id: string,
-    options: { Conversation: typeof ConversationModel }
-  ) => Promise<ConversationModel | undefined>;
-  getExpiredMessages: (options: {
-    MessageCollection: typeof MessageModelCollectionType;
-  }) => Promise<MessageModelCollectionType>;
-  getMessageById: (
-    id: string,
-    options: { Message: typeof MessageModel }
-  ) => Promise<MessageModel | undefined>;
-  getMessageBySender: (
-    data: {
-      source: string;
-      sourceUuid: string;
-      sourceDevice: number;
-      sent_at: number;
-    },
-    options: { Message: typeof MessageModel }
-  ) => Promise<MessageModel | null>;
-  getMessagesBySentAt: (
-    sentAt: number,
-    options: { MessageCollection: typeof MessageModelCollectionType }
-  ) => Promise<MessageModelCollectionType>;
-  getOlderMessagesByConversation: (
-    conversationId: string,
-    options: {
-      limit?: number;
-      messageId?: string;
-      receivedAt?: number;
-      sentAt?: number;
-      MessageCollection: typeof MessageModelCollectionType;
-    }
-  ) => Promise<MessageModelCollectionType>;
-  getNewerMessagesByConversation: (
-    conversationId: string,
-    options: {
-      limit?: number;
-      receivedAt?: number;
-      sentAt?: number;
-      MessageCollection: typeof MessageModelCollectionType;
-    }
-  ) => Promise<MessageModelCollectionType>;
-  getLastConversationMessages: (options: {
-    conversationId: string;
-    ourConversationId: string;
-    Message: typeof MessageModel;
-  }) => Promise<LastConversationMessagesType>;
-  getTapToViewMessagesNeedingErase: (options: {
-    MessageCollection: typeof MessageModelCollectionType;
-  }) => Promise<MessageModelCollectionType>;
-  removeConversation: (
-    id: string,
-    options: { Conversation: typeof ConversationModel }
-  ) => Promise<void>;
-  removeMessage: (
-    id: string,
-    options: { Message: typeof MessageModel }
-  ) => Promise<void>;
-  removeMessages: (
-    ids: Array<string>,
-    options: { Message: typeof MessageModel }
-  ) => Promise<void>;
+  // Differing signature on client/server
+
+  updateConversation: (data: ConversationType) => void;
+  removeConversation: (id: string) => Promise<void>;
+
   searchMessages: (
     query: string,
     options?: { limit?: number }
@@ -654,13 +687,40 @@ export type ClientInterface = DataInterface & {
     conversationId: string,
     options?: { limit?: number }
   ) => Promise<Array<ClientSearchResultMessageType>>;
-  updateConversation: (data: ConversationType, extra?: unknown) => void;
 
-  // Test-only
-
-  _getAllMessages: (options: {
-    MessageCollection: typeof MessageModelCollectionType;
-  }) => Promise<MessageModelCollectionType>;
+  getOlderMessagesByConversation: (
+    conversationId: string,
+    options: {
+      isGroup?: boolean;
+      limit?: number;
+      messageId?: string;
+      receivedAt?: number;
+      sentAt?: number;
+      storyId?: string;
+    }
+  ) => Promise<Array<MessageAttributesType>>;
+  getNewerMessagesByConversation: (
+    conversationId: string,
+    options: {
+      isGroup?: boolean;
+      limit?: number;
+      receivedAt?: number;
+      sentAt?: number;
+      storyId?: UUIDStringType;
+    }
+  ) => Promise<Array<MessageAttributesType>>;
+  getConversationRangeCenteredOnMessage: (options: {
+    conversationId: string;
+    limit?: number;
+    messageId: string;
+    receivedAt: number;
+    sentAt?: number;
+    storyId?: UUIDStringType;
+  }) => Promise<{
+    older: Array<MessageAttributesType>;
+    newer: Array<MessageAttributesType>;
+    metrics: ConversationMetricsType;
+  }>;
 
   // Client-side only
 
@@ -669,22 +729,18 @@ export type ClientInterface = DataInterface & {
     conversationId: string,
     options: {
       logId: string;
-      MessageCollection: typeof MessageModelCollectionType;
     }
   ) => Promise<void>;
   removeOtherData: () => Promise<void>;
   cleanupOrphanedAttachments: () => Promise<void>;
   ensureFilePermissions: () => Promise<void>;
 
-  // Client-side only, and test-only
-
-  _removeConversations: (ids: Array<string>) => Promise<void>;
   _jobs: { [id: string]: ClientJobType };
 
-  // These are defined on the server-only and used in the client to determine
-  // whether we should use IPC to use the database in the main process or
-  // use the db already running in the renderer.
+  // To decide whether to use IPC to use the database in the main process or
+  //   use the db already running in the renderer.
   goBackToMainProcess: () => Promise<void>;
+  startInRendererProcess: (isTesting?: boolean) => Promise<void>;
 };
 
 export type ClientJobType = {

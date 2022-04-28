@@ -1,4 +1,4 @@
-// Copyright 2017-2020 Signal Messenger, LLC
+// Copyright 2017-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { join } from 'path';
@@ -6,9 +6,9 @@ import { readFileSync } from 'fs';
 import { merge } from 'lodash';
 import { setupI18n } from '../ts/util/setupI18n';
 
-import { LoggerType } from '../ts/types/Logging';
-import { LocaleMessagesType } from '../ts/types/I18N';
-import { LocalizerType } from '../ts/types/Util';
+import type { LoggerType } from '../ts/types/Logging';
+import type { LocaleMessagesType } from '../ts/types/I18N';
+import type { LocalizerType } from '../ts/types/Util';
 
 function normalizeLocaleName(locale: string): string {
   if (/^en-/.test(locale)) {
@@ -32,17 +32,19 @@ function getLocaleMessages(locale: string): LocaleMessagesType {
   return JSON.parse(readFileSync(targetFile, 'utf-8'));
 }
 
+export type LocaleType = {
+  i18n: LocalizerType;
+  name: string;
+  messages: LocaleMessagesType;
+};
+
 export function load({
   appLocale,
   logger,
 }: {
   appLocale: string;
-  logger: LoggerType;
-}): {
-  i18n: LocalizerType;
-  name: string;
-  messages: LocaleMessagesType;
-} {
+  logger: Pick<LoggerType, 'error'>;
+}): LocaleType {
   if (!appLocale) {
     throw new TypeError('`appLocale` is required');
   }

@@ -1,19 +1,20 @@
-// Copyright 2019-2021 Signal Messenger, LLC
+// Copyright 2019-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { omit } from 'lodash';
 
 import { SignalService as Proto } from '../protobuf';
-import { MessageAttributesType } from '../model-types.d';
+import type { MessageAttributesType } from '../model-types.d';
 
 import { isNotNil } from '../util/isNotNil';
 import {
   format as formatPhoneNumber,
   parse as parsePhoneNumber,
 } from './PhoneNumber';
-import { AttachmentType, migrateDataToFileSystem } from './Attachment';
+import type { AttachmentType, migrateDataToFileSystem } from './Attachment';
 import { toLogFormat } from './errors';
-import { LoggerType } from './Logging';
+import type { LoggerType } from './Logging';
+import type { UUIDStringType } from './UUID';
 
 export type EmbeddedContactType = {
   name?: Name;
@@ -25,7 +26,7 @@ export type EmbeddedContactType = {
 
   // Populated by selector
   firstNumber?: string;
-  isNumberOnSignal?: boolean;
+  uuid?: UUIDStringType;
 };
 
 type Name = {
@@ -83,21 +84,61 @@ const DEFAULT_PHONE_TYPE = Proto.DataMessage.Contact.Phone.Type.HOME;
 const DEFAULT_EMAIL_TYPE = Proto.DataMessage.Contact.Email.Type.HOME;
 const DEFAULT_ADDRESS_TYPE = Proto.DataMessage.Contact.PostalAddress.Type.HOME;
 
+export function numberToPhoneType(
+  type: number
+): Proto.DataMessage.Contact.Phone.Type {
+  if (type === Proto.DataMessage.Contact.Phone.Type.MOBILE) {
+    return type;
+  }
+  if (type === Proto.DataMessage.Contact.Phone.Type.WORK) {
+    return type;
+  }
+  if (type === Proto.DataMessage.Contact.Phone.Type.CUSTOM) {
+    return type;
+  }
+
+  return DEFAULT_PHONE_TYPE;
+}
+
+export function numberToEmailType(
+  type: number
+): Proto.DataMessage.Contact.Email.Type {
+  if (type === Proto.DataMessage.Contact.Email.Type.MOBILE) {
+    return type;
+  }
+  if (type === Proto.DataMessage.Contact.Email.Type.WORK) {
+    return type;
+  }
+  if (type === Proto.DataMessage.Contact.Email.Type.CUSTOM) {
+    return type;
+  }
+
+  return DEFAULT_EMAIL_TYPE;
+}
+
+export function numberToAddressType(
+  type: number
+): Proto.DataMessage.Contact.PostalAddress.Type {
+  if (type === Proto.DataMessage.Contact.PostalAddress.Type.WORK) {
+    return type;
+  }
+  if (type === Proto.DataMessage.Contact.PostalAddress.Type.CUSTOM) {
+    return type;
+  }
+
+  return DEFAULT_ADDRESS_TYPE;
+}
+
 export function embeddedContactSelector(
   contact: EmbeddedContactType,
   options: {
-    regionCode: string;
+    regionCode?: string;
     firstNumber?: string;
-    isNumberOnSignal?: boolean;
+    uuid?: UUIDStringType;
     getAbsoluteAttachmentPath: (path: string) => string;
   }
 ): EmbeddedContactType {
-  const {
-    getAbsoluteAttachmentPath,
-    firstNumber,
-    isNumberOnSignal,
-    regionCode,
-  } = options;
+  const { getAbsoluteAttachmentPath, firstNumber, uuid, regionCode } = options;
 
   let { avatar } = contact;
   if (avatar && avatar.avatar) {
@@ -119,7 +160,7 @@ export function embeddedContactSelector(
   return {
     ...contact,
     firstNumber,
-    isNumberOnSignal,
+    uuid,
     avatar,
     number:
       contact.number &&

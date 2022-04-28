@@ -1,37 +1,45 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { ConversationAttributesType } from '../model-types.d';
-import { sendReadReceiptsFor } from './sendReadReceiptsFor';
+import type { ConversationAttributesType } from '../model-types.d';
 import { hasErrors } from '../state/selectors/message';
+import { readReceiptsJobQueue } from '../jobs/readReceiptsJobQueue';
 import { readSyncJobQueue } from '../jobs/readSyncJobQueue';
 import { notificationService } from '../services/notifications';
+import { isGroup } from './whatTypeOfConversation';
 import * as log from '../logging/log';
+import { getConversationIdForLogging } from './idForLogging';
 
 export async function markConversationRead(
   conversationAttrs: ConversationAttributesType,
-  newestUnreadId: number,
-  options: { readAt?: number; sendReadReceipts: boolean } = {
+  newestUnreadAt: number,
+  options: {
+    readAt?: number;
+    sendReadReceipts: boolean;
+    newestSentAt?: number;
+  } = {
     sendReadReceipts: true,
   }
 ): Promise<boolean> {
   const { id: conversationId } = conversationAttrs;
 
   const [unreadMessages, unreadReactions] = await Promise.all([
-    window.Signal.Data.getUnreadByConversationAndMarkRead(
+    window.Signal.Data.getUnreadByConversationAndMarkRead({
       conversationId,
-      newestUnreadId,
-      options.readAt
-    ),
-    window.Signal.Data.getUnreadReactionsAndMarkRead(
+      newestUnreadAt,
+      readAt: options.readAt,
+      isGroup: isGroup(conversationAttrs),
+    }),
+    window.Signal.Data.getUnreadReactionsAndMarkRead({
       conversationId,
-      newestUnreadId
-    ),
+      newestUnreadAt,
+    }),
   ]);
 
   log.info('markConversationRead', {
-    conversationId,
-    newestUnreadId,
+    conversationId: getConversationIdForLogging(conversationAttrs),
+    newestSentAt: options.newestSentAt,
+    newestUnreadAt,
     unreadMessages: unreadMessages.length,
     unreadReactions: unreadReactions.length,
   });
@@ -115,7 +123,10 @@ export async function markConversationRead(
       readSyncJobQueue.add({ readSyncs });
     }
 
-    await sendReadReceiptsFor(conversationAttrs, unreadMessagesSyncData);
+    await readReceiptsJobQueue.addIfAllowedByUser(
+      window.storage,
+      allReadMessagesSync
+    );
   }
 
   window.Whisper.ExpiringMessagesListener.update();

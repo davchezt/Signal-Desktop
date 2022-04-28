@@ -6,15 +6,20 @@ import {
   processPreKeyBundle,
   ProtocolAddress,
   PublicKey,
-} from '@signalapp/signal-client';
+} from '@signalapp/libsignal-client';
 
-import { UnregisteredUserError, HTTPError } from './Errors';
+import {
+  UnregisteredUserError,
+  HTTPError,
+  OutgoingIdentityKeyError,
+} from './Errors';
 import { Sessions, IdentityKeys } from '../LibSignalStores';
 import { Address } from '../types/Address';
 import { QualifiedAddress } from '../types/QualifiedAddress';
 import { UUID } from '../types/UUID';
-import { ServerKeysType, WebAPIType } from './WebAPI';
+import type { ServerKeysType, WebAPIType } from './WebAPI';
 import * as log from '../logging/log';
+import { isRecord } from '../util/isRecord';
 
 export async function getKeysForIdentifier(
   identifier: string,
@@ -41,8 +46,11 @@ export async function getKeysForIdentifier(
       if (theirUuid) {
         await window.textsecure.storage.protocol.archiveAllSessions(theirUuid);
       }
+
+      throw new UnregisteredUserError(identifier, error);
     }
-    throw new UnregisteredUserError(identifier, error);
+
+    throw error;
   }
 }
 
@@ -51,20 +59,32 @@ async function getServerKeys(
   server: WebAPIType,
   accessKey?: string
 ): Promise<{ accessKeyFailed?: boolean; keys: ServerKeysType }> {
-  if (!accessKey) {
-    return {
-      keys: await server.getKeysForIdentifier(identifier),
-    };
-  }
-
   try {
+    if (!accessKey) {
+      return {
+        keys: await server.getKeysForIdentifier(identifier),
+      };
+    }
+
     return {
       keys: await server.getKeysForIdentifierUnauth(identifier, undefined, {
         accessKey,
       }),
     };
-  } catch (error) {
-    if (error.code === 401 || error.code === 403) {
+  } catch (error: unknown) {
+    if (
+      error instanceof Error &&
+      error.message.includes('untrusted identity')
+    ) {
+      throw new OutgoingIdentityKeyError(identifier);
+    }
+
+    if (
+      accessKey &&
+      isRecord(error) &&
+      typeof error.code === 'number' &&
+      (error.code === 401 || error.code === 403)
+    ) {
       return {
         accessKeyFailed: true,
         keys: await server.getKeysForIdentifier(identifier),

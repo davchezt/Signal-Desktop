@@ -1,17 +1,16 @@
 // Copyright 2015-2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
-/* eslint-disable
-     class-methods-use-this,
-     @typescript-eslint/no-empty-function
-     */
+
+/* eslint-disable @typescript-eslint/no-empty-function */
 
 import { assert } from 'chai';
 import { v4 as getGuid } from 'uuid';
+import Long from 'long';
 
 import MessageReceiver from '../textsecure/MessageReceiver';
 import { IncomingWebSocketRequest } from '../textsecure/WebsocketResources';
-import { WebAPIType } from '../textsecure/WebAPI';
-import { DecryptionErrorEvent } from '../textsecure/messageReceiverEvents';
+import type { WebAPIType } from '../textsecure/WebAPI';
+import type { DecryptionErrorEvent } from '../textsecure/messageReceiverEvents';
 import { SignalService as Proto } from '../protobuf';
 import * as Crypto from '../Crypto';
 
@@ -50,14 +49,14 @@ describe('MessageReceiver', () => {
         source: number,
         sourceUuid: uuid,
         sourceDevice: deviceId,
-        timestamp: Date.now(),
+        timestamp: Long.fromNumber(Date.now()),
         content: Crypto.getRandomBytes(200),
       }).finish();
 
       messageReceiver.handleRequest(
         new IncomingWebSocketRequest(
           {
-            id: 1,
+            id: Long.fromNumber(1),
             verb: 'PUT',
             path: '/api/v1/message',
             body,

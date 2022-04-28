@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import React from 'react';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 import { Toast } from './Toast';
 
 export type ToastPropsType = {
@@ -23,8 +23,7 @@ export const ToastFileSize = ({
 }: PropsType): JSX.Element => {
   return (
     <Toast onClose={onClose}>
-      {i18n('fileSizeWarning')}
-      {limit}
+      {i18n('fileSizeWarning')} {limit}
       {units}
     </Toast>
   );

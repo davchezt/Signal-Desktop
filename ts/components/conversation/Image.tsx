@@ -6,18 +6,26 @@ import classNames from 'classnames';
 import { Blurhash } from 'react-blurhash';
 
 import { Spinner } from '../Spinner';
-import { LocalizerType, ThemeType } from '../../types/Util';
+import type { LocalizerType, ThemeType } from '../../types/Util';
+import type { AttachmentType } from '../../types/Attachment';
 import {
-  AttachmentType,
-  hasNotDownloaded,
+  isDownloaded as isDownloadedFunction,
   defaultBlurHash,
 } from '../../types/Attachment';
+
+export enum CurveType {
+  None = 0,
+  Tiny = 4,
+  Small = 10,
+  Normal = 18,
+}
 
 export type Props = {
   alt: string;
   attachment: AttachmentType;
   url?: string;
 
+  isDownloaded?: boolean;
   className?: string;
   height?: number;
   width?: number;
@@ -31,16 +39,13 @@ export type Props = {
   noBackground?: boolean;
   bottomOverlay?: boolean;
   closeButton?: boolean;
-  curveBottomLeft?: boolean;
-  curveBottomRight?: boolean;
-  curveTopLeft?: boolean;
-  curveTopRight?: boolean;
-
-  smallCurveTopLeft?: boolean;
+  curveBottomLeft?: CurveType;
+  curveBottomRight?: CurveType;
+  curveTopLeft?: CurveType;
+  curveTopRight?: CurveType;
 
   darkOverlay?: boolean;
   playIconOverlay?: boolean;
-  softCorners?: boolean;
   blurHash?: string;
 
   i18n: LocalizerType;
@@ -135,7 +140,7 @@ export class Image extends React.Component<Props> {
     );
   };
 
-  public render(): JSX.Element {
+  public override render(): JSX.Element {
     const {
       alt,
       attachment,
@@ -148,6 +153,7 @@ export class Image extends React.Component<Props> {
       curveTopLeft,
       curveTopRight,
       darkOverlay,
+      isDownloaded,
       height = 0,
       i18n,
       noBackground,
@@ -156,8 +162,6 @@ export class Image extends React.Component<Props> {
       onError,
       overlayText,
       playIconOverlay,
-      smallCurveTopLeft,
-      softCorners,
       tabIndex,
       theme,
       url,
@@ -168,29 +172,31 @@ export class Image extends React.Component<Props> {
 
     const { caption, pending } = attachment || { caption: null, pending: true };
     const canClick = this.canClick();
-    const imgNotDownloaded = hasNotDownloaded(attachment);
+    const imgNotDownloaded = isDownloaded
+      ? false
+      : !isDownloadedFunction(attachment);
 
     const resolvedBlurHash = blurHash || defaultBlurHash(theme);
 
-    const overlayClassName = classNames('module-image__border-overlay', {
-      'module-image__border-overlay--with-border': !noBorder,
-      'module-image__border-overlay--with-click-handler': canClick,
-      'module-image--curved-top-left': curveTopLeft,
-      'module-image--curved-top-right': curveTopRight,
-      'module-image--curved-bottom-left': curveBottomLeft,
-      'module-image--curved-bottom-right': curveBottomRight,
-      'module-image--small-curved-top-left': smallCurveTopLeft,
-      'module-image--soft-corners': softCorners,
-      'module-image__border-overlay--dark': darkOverlay,
-      'module-image--not-downloaded': imgNotDownloaded,
-    });
+    const curveStyles = {
+      borderTopLeftRadius: curveTopLeft || CurveType.None,
+      borderTopRightRadius: curveTopRight || CurveType.None,
+      borderBottomLeftRadius: curveBottomLeft || CurveType.None,
+      borderBottomRightRadius: curveBottomRight || CurveType.None,
+    };
 
     const overlay = canClick ? (
       // Not sure what this button does.
       // eslint-disable-next-line jsx-a11y/control-has-associated-label
       <button
         type="button"
-        className={overlayClassName}
+        className={classNames('module-image__border-overlay', {
+          'module-image__border-overlay--with-border': !noBorder,
+          'module-image__border-overlay--with-click-handler': canClick,
+          'module-image__border-overlay--dark': darkOverlay,
+          'module-image--not-downloaded': imgNotDownloaded,
+        })}
+        style={curveStyles}
         onClick={this.handleClick}
         onKeyDown={this.handleKeyDown}
         tabIndex={tabIndex}
@@ -206,15 +212,13 @@ export class Image extends React.Component<Props> {
           'module-image',
           className,
           !noBackground ? 'module-image--with-background' : null,
-          curveBottomLeft ? 'module-image--curved-bottom-left' : null,
-          curveBottomRight ? 'module-image--curved-bottom-right' : null,
-          curveTopLeft ? 'module-image--curved-top-left' : null,
-          curveTopRight ? 'module-image--curved-top-right' : null,
-          smallCurveTopLeft ? 'module-image--small-curved-top-left' : null,
-          softCorners ? 'module-image--soft-corners' : null,
           cropWidth || cropHeight ? 'module-image--cropped' : null
         )}
-        style={{ width: width - cropWidth, height: height - cropHeight }}
+        style={{
+          width: width - cropWidth,
+          height: height - cropHeight,
+          ...curveStyles,
+        }}
       >
         {pending ? (
           this.renderPending()
@@ -244,14 +248,14 @@ export class Image extends React.Component<Props> {
         ) : null}
         {bottomOverlay ? (
           <div
-            className={classNames(
-              'module-image__bottom-overlay',
-              curveBottomLeft ? 'module-image--curved-bottom-left' : null,
-              curveBottomRight ? 'module-image--curved-bottom-right' : null
-            )}
+            className="module-image__bottom-overlay"
+            style={{
+              borderBottomLeftRadius: curveBottomLeft || CurveType.None,
+              borderBottomRightRadius: curveBottomRight || CurveType.None,
+            }}
           />
         ) : null}
-        {!pending && playIconOverlay ? (
+        {!pending && !imgNotDownloaded && playIconOverlay ? (
           <div className="module-image__play-overlay__circle">
             <div className="module-image__play-overlay__icon" />
           </div>

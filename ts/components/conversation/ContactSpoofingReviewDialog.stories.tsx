@@ -11,6 +11,7 @@ import { getDefaultConversation } from '../../test-both/helpers/getDefaultConver
 
 import { ContactSpoofingReviewDialog } from './ContactSpoofingReviewDialog';
 import { ContactSpoofingType } from '../../util/contactSpoofing';
+import { ThemeType } from '../../types/Util';
 
 const i18n = setupI18n('en', enMessages);
 
@@ -20,7 +21,9 @@ const story = storiesOf(
 );
 
 const getCommonProps = () => ({
+  getPreferredBadge: () => undefined,
   i18n,
+  groupConversationId: 'convo-id',
   onBlock: action('onBlock'),
   onBlockAndReportSpam: action('onBlockAndReportSpam'),
   onClose: action('onClose'),
@@ -28,6 +31,7 @@ const getCommonProps = () => ({
   onShowContactModal: action('onShowContactModal'),
   onUnblock: action('onUnblock'),
   removeMember: action('removeMember'),
+  theme: ThemeType.light,
 });
 
 story.add('Direct conversations with same title', () => (
@@ -48,7 +52,10 @@ story.add('Direct conversations with same title', () => (
       <ContactSpoofingReviewDialog
         {...getCommonProps()}
         type={ContactSpoofingType.MultipleGroupMembersWithSameTitle}
-        areWeAdmin={areWeAdmin}
+        group={{
+          ...getDefaultConversation(),
+          areWeAdmin,
+        }}
         collisionInfoByTitle={{
           Alice: times(2, () => ({
             oldName: 'Alicia',

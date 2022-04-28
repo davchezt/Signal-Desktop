@@ -5,11 +5,13 @@ import { assert } from 'chai';
 import { sampleSize, times } from 'lodash';
 import { v4 as uuid } from 'uuid';
 
-import {
+import type {
   SendAction,
-  SendActionType,
   SendState,
   SendStateByConversationId,
+} from '../../messages/MessageSendState';
+import {
+  SendActionType,
   SendStatus,
   isDelivered,
   isFailed,
@@ -217,6 +219,20 @@ describe('message send state utilities', () => {
             },
           },
           ourConversationId
+        )
+      );
+    });
+
+    it('returns false if the message is for you but we have no conversationId', () => {
+      assert.isFalse(
+        isMessageJustForMe(
+          {
+            [ourConversationId]: {
+              status: SendStatus.Sent,
+              updatedAt: 123,
+            },
+          },
+          undefined
         )
       );
     });

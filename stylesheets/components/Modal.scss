@@ -19,7 +19,7 @@
   }
 
   @include dark-theme() {
-    background: $color-gray-95;
+    background: $color-gray-80;
     color: $color-gray-05;
   }
 
@@ -133,14 +133,14 @@
       position: sticky;
       right: 0;
       width: 100%;
-      z-index: 10;
+      z-index: $z-index-above-popup;
 
       @include light-theme() {
         background: $color-white;
       }
 
       @include dark-theme() {
-        background: $color-gray-95;
+        background: $color-gray-80;
       }
     }
   }

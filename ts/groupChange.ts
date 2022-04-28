@@ -1,59 +1,73 @@
-// Copyright 2020 Signal Messenger, LLC
+// Copyright 2020-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { FullJSXType } from './components/Intl';
-import { LocalizerType } from './types/Util';
-import { ReplacementValuesType } from './types/I18N';
+import type { LocalizerType } from './types/Util';
+import type { ReplacementValuesType } from './types/I18N';
+import type { UUIDStringType } from './types/UUID';
 import { missingCaseError } from './util/missingCaseError';
 
-import { GroupV2ChangeDetailType, GroupV2ChangeType } from './groups';
+import type { GroupV2ChangeDetailType, GroupV2ChangeType } from './groups';
 import { SignalService as Proto } from './protobuf';
 import * as log from './logging/log';
 
-export type SmartContactRendererType = (conversationId: string) => FullJSXType;
-export type StringRendererType = (
+export type SmartContactRendererType<T> = (uuid: UUIDStringType) => T | string;
+export type StringRendererType<T> = (
   id: string,
   i18n: LocalizerType,
-  components?: Array<FullJSXType> | ReplacementValuesType<FullJSXType>
-) => FullJSXType;
+  components?: Array<T | string> | ReplacementValuesType<T | string>
+) => T | string;
 
-export type RenderOptionsType = {
-  from?: string;
+export type RenderOptionsType<T> = {
+  from?: UUIDStringType;
   i18n: LocalizerType;
-  ourConversationId: string;
-  renderContact: SmartContactRendererType;
-  renderString: StringRendererType;
+  ourUuid?: UUIDStringType;
+  renderContact: SmartContactRendererType<T>;
+  renderString: StringRendererType<T>;
 };
 
 const AccessControlEnum = Proto.AccessControl.AccessRequired;
 const RoleEnum = Proto.Member.Role;
 
-export function renderChange(
+export type RenderChangeResultType<T> = ReadonlyArray<
+  Readonly<{
+    detail: GroupV2ChangeDetailType;
+    text: T | string;
+
+    // Used to differentiate between the multiple texts produced by
+    // 'admin-approval-bounce'
+    isLastText: boolean;
+  }>
+>;
+
+export function renderChange<T>(
   change: GroupV2ChangeType,
-  options: RenderOptionsType
-): Array<FullJSXType> {
+  options: RenderOptionsType<T>
+): RenderChangeResultType<T> {
   const { details, from } = change;
 
-  return details.map((detail: GroupV2ChangeDetailType) =>
-    renderChangeDetail(detail, {
+  return details.flatMap((detail: GroupV2ChangeDetailType) => {
+    const texts = renderChangeDetail<T>(detail, {
       ...options,
       from,
-    })
-  );
+    });
+
+    if (!Array.isArray(texts)) {
+      return { detail, isLastText: true, text: texts };
+    }
+
+    return texts.map((text, index) => {
+      const isLastText = index === texts.length - 1;
+      return { detail, isLastText, text };
+    });
+  });
 }
 
-export function renderChangeDetail(
+export function renderChangeDetail<T>(
   detail: GroupV2ChangeDetailType,
-  options: RenderOptionsType
-): FullJSXType {
-  const {
-    from,
-    i18n,
-    ourConversationId,
-    renderContact,
-    renderString,
-  } = options;
-  const fromYou = Boolean(from && from === ourConversationId);
+  options: RenderOptionsType<T>
+): T | string | ReadonlyArray<T | string> {
+  const { from, i18n, ourUuid, renderContact, renderString } = options;
+  const fromYou = Boolean(from && ourUuid && from === ourUuid);
 
   if (detail.type === 'create') {
     if (fromYou) {
@@ -214,8 +228,8 @@ export function renderChangeDetail(
     return '';
   }
   if (detail.type === 'member-add') {
-    const { conversationId } = detail;
-    const weAreJoiner = conversationId === ourConversationId;
+    const { uuid } = detail;
+    const weAreJoiner = Boolean(ourUuid && uuid === ourUuid);
 
     if (weAreJoiner) {
       if (fromYou) {
@@ -230,25 +244,25 @@ export function renderChangeDetail(
     }
     if (fromYou) {
       return renderString('GroupV2--member-add--other--you', i18n, [
-        renderContact(conversationId),
+        renderContact(uuid),
       ]);
     }
     if (from) {
       return renderString('GroupV2--member-add--other--other', i18n, {
         adderName: renderContact(from),
-        addeeName: renderContact(conversationId),
+        addeeName: renderContact(uuid),
       });
     }
     return renderString('GroupV2--member-add--other--unknown', i18n, [
-      renderContact(conversationId),
+      renderContact(uuid),
     ]);
   }
   if (detail.type === 'member-add-from-invite') {
-    const { conversationId, inviter } = detail;
-    const weAreJoiner = conversationId === ourConversationId;
-    const weAreInviter = Boolean(inviter && inviter === ourConversationId);
+    const { uuid, inviter } = detail;
+    const weAreJoiner = Boolean(ourUuid && uuid === ourUuid);
+    const weAreInviter = Boolean(inviter && ourUuid && inviter === ourUuid);
 
-    if (!from || from !== conversationId) {
+    if (!from || from !== uuid) {
       if (weAreJoiner) {
         // They can't be the same, no fromYou check here
         if (from) {
@@ -261,17 +275,17 @@ export function renderChangeDetail(
 
       if (fromYou) {
         return renderString('GroupV2--member-add--invited--you', i18n, {
-          inviteeName: renderContact(conversationId),
+          inviteeName: renderContact(uuid),
         });
       }
       if (from) {
         return renderString('GroupV2--member-add--invited--other', i18n, {
           memberName: renderContact(from),
-          inviteeName: renderContact(conversationId),
+          inviteeName: renderContact(uuid),
         });
       }
       return renderString('GroupV2--member-add--invited--unknown', i18n, {
-        inviteeName: renderContact(conversationId),
+        inviteeName: renderContact(uuid),
       });
     }
 
@@ -288,12 +302,12 @@ export function renderChangeDetail(
     }
     if (weAreInviter) {
       return renderString('GroupV2--member-add--from-invite--from-you', i18n, [
-        renderContact(conversationId),
+        renderContact(uuid),
       ]);
     }
     if (inviter) {
       return renderString('GroupV2--member-add--from-invite--other', i18n, {
-        inviteeName: renderContact(conversationId),
+        inviteeName: renderContact(uuid),
         inviterName: renderContact(inviter),
       });
     }
@@ -301,17 +315,17 @@ export function renderChangeDetail(
       'GroupV2--member-add--from-invite--other-no-from',
       i18n,
       {
-        inviteeName: renderContact(conversationId),
+        inviteeName: renderContact(uuid),
       }
     );
   }
   if (detail.type === 'member-add-from-link') {
-    const { conversationId } = detail;
+    const { uuid } = detail;
 
-    if (fromYou && conversationId === ourConversationId) {
+    if (fromYou && ourUuid && uuid === ourUuid) {
       return renderString('GroupV2--member-add-from-link--you--you', i18n);
     }
-    if (from && conversationId === from) {
+    if (from && uuid === from) {
       return renderString('GroupV2--member-add-from-link--other', i18n, [
         renderContact(from),
       ]);
@@ -321,12 +335,12 @@ export function renderChangeDetail(
     //   from group change events, which always have a sender.
     log.warn('member-add-from-link change type; we have no from!');
     return renderString('GroupV2--member-add--other--unknown', i18n, [
-      renderContact(conversationId),
+      renderContact(uuid),
     ]);
   }
   if (detail.type === 'member-add-from-admin-approval') {
-    const { conversationId } = detail;
-    const weAreJoiner = conversationId === ourConversationId;
+    const { uuid } = detail;
+    const weAreJoiner = Boolean(ourUuid && uuid === ourUuid);
 
     if (weAreJoiner) {
       if (from) {
@@ -352,7 +366,7 @@ export function renderChangeDetail(
       return renderString(
         'GroupV2--member-add-from-admin-approval--other--you',
         i18n,
-        [renderContact(conversationId)]
+        [renderContact(uuid)]
       );
     }
     if (from) {
@@ -361,7 +375,7 @@ export function renderChangeDetail(
         i18n,
         {
           adminName: renderContact(from),
-          joinerName: renderContact(conversationId),
+          joinerName: renderContact(uuid),
         }
       );
     }
@@ -372,12 +386,12 @@ export function renderChangeDetail(
     return renderString(
       'GroupV2--member-add-from-admin-approval--other--unknown',
       i18n,
-      [renderContact(conversationId)]
+      [renderContact(uuid)]
     );
   }
   if (detail.type === 'member-remove') {
-    const { conversationId } = detail;
-    const weAreLeaver = conversationId === ourConversationId;
+    const { uuid } = detail;
+    const weAreLeaver = Boolean(ourUuid && uuid === ourUuid);
 
     if (weAreLeaver) {
       if (fromYou) {
@@ -393,10 +407,10 @@ export function renderChangeDetail(
 
     if (fromYou) {
       return renderString('GroupV2--member-remove--other--you', i18n, [
-        renderContact(conversationId),
+        renderContact(uuid),
       ]);
     }
-    if (from && from === conversationId) {
+    if (from && from === uuid) {
       return renderString('GroupV2--member-remove--other--self', i18n, [
         renderContact(from),
       ]);
@@ -404,16 +418,16 @@ export function renderChangeDetail(
     if (from) {
       return renderString('GroupV2--member-remove--other--other', i18n, {
         adminName: renderContact(from),
-        memberName: renderContact(conversationId),
+        memberName: renderContact(uuid),
       });
     }
     return renderString('GroupV2--member-remove--other--unknown', i18n, [
-      renderContact(conversationId),
+      renderContact(uuid),
     ]);
   }
   if (detail.type === 'member-privilege') {
-    const { conversationId, newPrivilege } = detail;
-    const weAreMember = conversationId === ourConversationId;
+    const { uuid, newPrivilege } = detail;
+    const weAreMember = Boolean(ourUuid && uuid === ourUuid);
 
     if (newPrivilege === RoleEnum.ADMINISTRATOR) {
       if (weAreMember) {
@@ -435,7 +449,7 @@ export function renderChangeDetail(
         return renderString(
           'GroupV2--member-privilege--promote--other--you',
           i18n,
-          [renderContact(conversationId)]
+          [renderContact(uuid)]
         );
       }
       if (from) {
@@ -444,14 +458,14 @@ export function renderChangeDetail(
           i18n,
           {
             adminName: renderContact(from),
-            memberName: renderContact(conversationId),
+            memberName: renderContact(uuid),
           }
         );
       }
       return renderString(
         'GroupV2--member-privilege--promote--other--unknown',
         i18n,
-        [renderContact(conversationId)]
+        [renderContact(uuid)]
       );
     }
     if (newPrivilege === RoleEnum.DEFAULT) {
@@ -473,7 +487,7 @@ export function renderChangeDetail(
         return renderString(
           'GroupV2--member-privilege--demote--other--you',
           i18n,
-          [renderContact(conversationId)]
+          [renderContact(uuid)]
         );
       }
       if (from) {
@@ -482,14 +496,14 @@ export function renderChangeDetail(
           i18n,
           {
             adminName: renderContact(from),
-            memberName: renderContact(conversationId),
+            memberName: renderContact(uuid),
           }
         );
       }
       return renderString(
         'GroupV2--member-privilege--demote--other--unknown',
         i18n,
-        [renderContact(conversationId)]
+        [renderContact(uuid)]
       );
     }
     log.warn(
@@ -498,8 +512,8 @@ export function renderChangeDetail(
     return '';
   }
   if (detail.type === 'pending-add-one') {
-    const { conversationId } = detail;
-    const weAreInvited = conversationId === ourConversationId;
+    const { uuid } = detail;
+    const weAreInvited = Boolean(ourUuid && uuid === ourUuid);
     if (weAreInvited) {
       if (from) {
         return renderString('GroupV2--pending-add--one--you--other', i18n, [
@@ -510,7 +524,7 @@ export function renderChangeDetail(
     }
     if (fromYou) {
       return renderString('GroupV2--pending-add--one--other--you', i18n, [
-        renderContact(conversationId),
+        renderContact(uuid),
       ]);
     }
     if (from) {
@@ -539,23 +553,23 @@ export function renderChangeDetail(
     ]);
   }
   if (detail.type === 'pending-remove-one') {
-    const { inviter, conversationId } = detail;
-    const weAreInviter = Boolean(inviter && inviter === ourConversationId);
-    const weAreInvited = conversationId === ourConversationId;
-    const sentByInvited = Boolean(from && from === conversationId);
+    const { inviter, uuid } = detail;
+    const weAreInviter = Boolean(inviter && ourUuid && inviter === ourUuid);
+    const weAreInvited = Boolean(ourUuid && uuid === ourUuid);
+    const sentByInvited = Boolean(from && from === uuid);
     const sentByInviter = Boolean(from && inviter && from === inviter);
 
     if (weAreInviter) {
       if (sentByInvited) {
         return renderString('GroupV2--pending-remove--decline--you', i18n, [
-          renderContact(conversationId),
+          renderContact(uuid),
         ]);
       }
       if (fromYou) {
         return renderString(
           'GroupV2--pending-remove--revoke-invite-from-you--one--you',
           i18n,
-          [renderContact(conversationId)]
+          [renderContact(uuid)]
         );
       }
       if (from) {
@@ -564,14 +578,14 @@ export function renderChangeDetail(
           i18n,
           {
             adminName: renderContact(from),
-            inviteeName: renderContact(conversationId),
+            inviteeName: renderContact(uuid),
           }
         );
       }
       return renderString(
         'GroupV2--pending-remove--revoke-invite-from-you--one--unknown',
         i18n,
-        [renderContact(conversationId)]
+        [renderContact(uuid)]
       );
     }
     if (sentByInvited) {
@@ -635,7 +649,7 @@ export function renderChangeDetail(
   }
   if (detail.type === 'pending-remove-many') {
     const { count, inviter } = detail;
-    const weAreInviter = Boolean(inviter && inviter === ourConversationId);
+    const weAreInviter = Boolean(inviter && ourUuid && inviter === ourUuid);
 
     if (weAreInviter) {
       if (fromYou) {
@@ -714,19 +728,19 @@ export function renderChangeDetail(
     );
   }
   if (detail.type === 'admin-approval-add-one') {
-    const { conversationId } = detail;
-    const weAreJoiner = conversationId === ourConversationId;
+    const { uuid } = detail;
+    const weAreJoiner = Boolean(ourUuid && uuid === ourUuid);
 
     if (weAreJoiner) {
       return renderString('GroupV2--admin-approval-add-one--you', i18n);
     }
     return renderString('GroupV2--admin-approval-add-one--other', i18n, [
-      renderContact(conversationId),
+      renderContact(uuid),
     ]);
   }
   if (detail.type === 'admin-approval-remove-one') {
-    const { conversationId } = detail;
-    const weAreJoiner = conversationId === ourConversationId;
+    const { uuid } = detail;
+    const weAreJoiner = Boolean(ourUuid && uuid === ourUuid);
 
     if (weAreJoiner) {
       if (fromYou) {
@@ -745,14 +759,14 @@ export function renderChangeDetail(
       return renderString(
         'GroupV2--admin-approval-remove-one--other--you',
         i18n,
-        [renderContact(conversationId)]
+        [renderContact(uuid)]
       );
     }
-    if (from && from === conversationId) {
+    if (from && from === uuid) {
       return renderString(
         'GroupV2--admin-approval-remove-one--other--own',
         i18n,
-        [renderContact(conversationId)]
+        [renderContact(uuid)]
       );
     }
     if (from) {
@@ -761,7 +775,7 @@ export function renderChangeDetail(
         i18n,
         {
           adminName: renderContact(from),
-          joinerName: renderContact(conversationId),
+          joinerName: renderContact(uuid),
         }
       );
     }
@@ -771,8 +785,40 @@ export function renderChangeDetail(
     return renderString(
       'GroupV2--admin-approval-remove-one--other--own',
       i18n,
-      [renderContact(conversationId)]
+      [renderContact(uuid)]
     );
+  }
+  if (detail.type === 'admin-approval-bounce') {
+    const { uuid, times, isApprovalPending } = detail;
+
+    let firstMessage: T | string;
+    if (times === 1) {
+      firstMessage = renderString('GroupV2--admin-approval-bounce--one', i18n, {
+        joinerName: renderContact(uuid),
+      });
+    } else {
+      firstMessage = renderString('GroupV2--admin-approval-bounce', i18n, {
+        joinerName: renderContact(uuid),
+        numberOfRequests: String(times),
+      });
+    }
+
+    if (!isApprovalPending) {
+      return firstMessage;
+    }
+
+    const secondMessage = renderChangeDetail(
+      {
+        type: 'admin-approval-add-one',
+        uuid,
+      },
+      options
+    );
+
+    return [
+      firstMessage,
+      ...(Array.isArray(secondMessage) ? secondMessage : [secondMessage]),
+    ];
   }
   if (detail.type === 'group-link-add') {
     const { privilege } = detail;

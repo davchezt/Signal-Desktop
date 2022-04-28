@@ -3,16 +3,15 @@
 
 import URL from 'url';
 import ProxyAgent from 'proxy-agent';
-import { RequestInit, Response, Headers } from 'node-fetch';
-import { client as WebSocketClient } from 'websocket';
+import type { RequestInit } from 'node-fetch';
+import { Response, Headers } from 'node-fetch';
+import type { connection as WebSocket } from 'websocket';
 import qs from 'querystring';
 import EventListener from 'events';
 
-import { AbortableProcess } from '../util/AbortableProcess';
+import type { AbortableProcess } from '../util/AbortableProcess';
 import { strictAssert } from '../util/assert';
-import { explodePromise } from '../util/explodePromise';
 import { BackOff, FIBONACCI_TIMEOUTS } from '../util/BackOff';
-import { getUserAgent } from '../util/getUserAgent';
 import * as durations from '../util/durations';
 import { sleep } from '../util/sleep';
 import { SocketStatus } from '../types/SocketStatus';
@@ -20,15 +19,14 @@ import * as Errors from '../types/errors';
 import * as Bytes from '../Bytes';
 import * as log from '../logging/log';
 
-import WebSocketResource, {
+import type {
   WebSocketResourceOptions,
   IncomingWebSocketRequest,
 } from './WebsocketResources';
-import { ConnectTimeoutError, HTTPError } from './Errors';
-import { handleStatusCode, translateError } from './Utils';
-import { WebAPICredentials, IRequestHandler } from './Types.d';
-
-const TEN_SECONDS = 10 * durations.SECOND;
+import WebSocketResource from './WebsocketResources';
+import { HTTPError } from './Errors';
+import type { WebAPICredentials, IRequestHandler } from './Types.d';
+import { connect as connectWebSocket } from './WebSocket';
 
 const FIVE_MINUTES = 5 * durations.MINUTE;
 
@@ -68,7 +66,7 @@ export class SocketManager extends EventListener {
 
   private credentials?: WebAPICredentials;
 
-  private readonly proxyAgent?: ProxyAgent;
+  private readonly proxyAgent?: ReturnType<typeof ProxyAgent>;
 
   private status = SocketStatus.CLOSED;
 
@@ -131,6 +129,7 @@ export class SocketManager extends EventListener {
     this.setStatus(SocketStatus.CONNECTING);
 
     const process = this.connectResource({
+      name: 'authenticated',
       path: '/v1/websocket/',
       query: { login: username, password },
       resourceOptions: {
@@ -171,7 +170,7 @@ export class SocketManager extends EventListener {
         await this.authenticate(this.credentials);
       } catch (error) {
         log.info(
-          'SocketManager: authenticated socket failed to reconect ' +
+          'SocketManager: authenticated socket failed to reconnect ' +
             `due to error ${Errors.toLogFormat(error)}`
         );
         return reconnect();
@@ -255,6 +254,7 @@ export class SocketManager extends EventListener {
     handler: IRequestHandler
   ): Promise<WebSocketResource> {
     return this.connectResource({
+      name: 'provisioning',
       path: '/v1/websocket/provisioning/',
       resourceOptions: {
         handleRequest: (req: IncomingWebSocketRequest): void => {
@@ -428,6 +428,7 @@ export class SocketManager extends EventListener {
     log.info('SocketManager: connecting unauthenticated socket');
 
     const process = this.connectResource({
+      name: 'unauthenticated',
       path: '/v1/websocket/',
       resourceOptions: {
         keepalive: { path: '/v1/keepalive' },
@@ -466,115 +467,35 @@ export class SocketManager extends EventListener {
   }
 
   private connectResource({
+    name,
     path,
     resourceOptions,
     query = {},
-    timeout = TEN_SECONDS,
   }: {
+    name: string;
     path: string;
     resourceOptions: WebSocketResourceOptions;
     query?: Record<string, string>;
-    timeout?: number;
   }): AbortableProcess<WebSocketResource> {
-    const fixedScheme = this.options.url
-      .replace('https://', 'wss://')
-      .replace('http://', 'ws://');
-
-    const headers = {
-      'User-Agent': getUserAgent(this.options.version),
-    };
-    const client = new WebSocketClient({
-      tlsOptions: {
-        ca: this.options.certificateAuthority,
-        agent: this.proxyAgent,
-      },
-      maxReceivedFrameSize: 0x210000,
-    });
-
     const queryWithDefaults = {
       agent: 'OWD',
       version: this.options.version,
       ...query,
     };
 
-    client.connect(
-      `${fixedScheme}${path}?${qs.encode(queryWithDefaults)}`,
-      undefined,
-      undefined,
-      headers
-    );
+    const url = `${this.options.url}${path}?${qs.encode(queryWithDefaults)}`;
 
-    const { stack } = new Error();
+    return connectWebSocket({
+      name,
+      url,
+      certificateAuthority: this.options.certificateAuthority,
+      version: this.options.version,
+      proxyAgent: this.proxyAgent,
 
-    const { promise, resolve, reject } = explodePromise<WebSocketResource>();
-
-    const timer = setTimeout(() => {
-      reject(new ConnectTimeoutError('Connection timed out'));
-
-      client.abort();
-    }, timeout);
-
-    let resource: WebSocketResource | undefined;
-    client.on('connect', socket => {
-      clearTimeout(timer);
-
-      resource = new WebSocketResource(socket, resourceOptions);
-      resolve(resource);
-    });
-
-    client.on('httpResponse', async response => {
-      clearTimeout(timer);
-
-      const statusCode = response.statusCode || -1;
-      await handleStatusCode(statusCode);
-
-      const error = new HTTPError(
-        'connectResource: invalid websocket response',
-        {
-          code: statusCode || -1,
-          headers: {},
-          stack,
-        }
-      );
-
-      const translatedError = translateError(error);
-      strictAssert(
-        translatedError,
-        '`httpResponse` event cannot be emitted with 200 status code'
-      );
-
-      reject(translatedError);
-    });
-
-    client.on('connectFailed', e => {
-      clearTimeout(timer);
-
-      reject(
-        new HTTPError('connectResource: connectFailed', {
-          code: -1,
-          headers: {},
-          response: e.toString(),
-          stack,
-        })
-      );
-    });
-
-    return new AbortableProcess<WebSocketResource>(
-      `SocketManager.connectResource(${path})`,
-      {
-        abort() {
-          if (resource) {
-            log.warn(`SocketManager closing socket ${path}`);
-            resource.close(3000, 'aborted');
-          } else {
-            log.warn(`SocketManager aborting connection ${path}`);
-            clearTimeout(timer);
-            client.abort();
-          }
-        },
+      createResource(socket: WebSocket): WebSocketResource {
+        return new WebSocketResource(socket, resourceOptions);
       },
-      promise
-    );
+    });
   }
 
   private static async checkResource(
@@ -711,10 +632,13 @@ export class SocketManager extends EventListener {
 
   // EventEmitter types
 
-  public on(type: 'authError', callback: (error: HTTPError) => void): this;
-  public on(type: 'statusChange', callback: () => void): this;
+  public override on(
+    type: 'authError',
+    callback: (error: HTTPError) => void
+  ): this;
+  public override on(type: 'statusChange', callback: () => void): this;
 
-  public on(
+  public override on(
     type: string | symbol,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     listener: (...args: Array<any>) => void
@@ -722,11 +646,11 @@ export class SocketManager extends EventListener {
     return super.on(type, listener);
   }
 
-  public emit(type: 'authError', error: HTTPError): boolean;
-  public emit(type: 'statusChange'): boolean;
+  public override emit(type: 'authError', error: HTTPError): boolean;
+  public override emit(type: 'statusChange'): boolean;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public emit(type: string | symbol, ...args: Array<any>): boolean {
+  public override emit(type: string | symbol, ...args: Array<any>): boolean {
     return super.emit(type, ...args);
   }
 }

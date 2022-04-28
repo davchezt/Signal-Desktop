@@ -8,10 +8,13 @@ import { boolean } from '@storybook/addon-knobs';
 import { storiesOf } from '@storybook/react';
 
 import { getDefaultConversation } from '../../test-both/helpers/getDefaultConversation';
-import { ContactModal, PropsType } from './ContactModal';
+import type { PropsType } from './ContactModal';
+import { ContactModal } from './ContactModal';
 import { setupI18n } from '../../util/setupI18n';
 import enMessages from '../../../_locales/en/messages.json';
-import { ConversationType } from '../../state/ducks/conversations';
+import type { ConversationType } from '../../state/ducks/conversations';
+import { getFakeBadges } from '../../test-both/helpers/getFakeBadge';
+import { ThemeType } from '../../types/Util';
 
 const i18n = setupI18n('en', enMessages);
 
@@ -19,22 +22,31 @@ const story = storiesOf('Components/Conversation/ContactModal', module);
 
 const defaultContact: ConversationType = getDefaultConversation({
   id: 'abcdef',
-  areWeAdmin: false,
   title: 'Pauline Oliveros',
   phoneNumber: '(333) 444-5515',
   about: '👍 Free to chat',
 });
+const defaultGroup: ConversationType = getDefaultConversation({
+  id: 'abcdef',
+  areWeAdmin: true,
+  title: "It's a group",
+  groupLink: 'something',
+});
 
 const createProps = (overrideProps: Partial<PropsType> = {}): PropsType => ({
+  areWeASubscriber: false,
   areWeAdmin: boolean('areWeAdmin', overrideProps.areWeAdmin || false),
+  badges: overrideProps.badges || [],
   contact: overrideProps.contact || defaultContact,
+  conversation: overrideProps.conversation || defaultGroup,
   hideContactModal: action('hideContactModal'),
   i18n,
   isAdmin: boolean('isAdmin', overrideProps.isAdmin || false),
   isMember: boolean('isMember', overrideProps.isMember || true),
   openConversationInternal: action('openConversationInternal'),
   removeMemberFromGroup: action('removeMemberFromGroup'),
-  showSafetyNumberInConversation: action('showSafetyNumberInConversation'),
+  theme: ThemeType.light,
+  toggleSafetyNumberModal: action('toggleSafetyNumberModal'),
   toggleAdmin: action('toggleAdmin'),
   updateConversationModelSharedGroups: action(
     'updateConversationModelSharedGroups'
@@ -52,6 +64,17 @@ story.add('As non-admin', () => {
 story.add('As admin', () => {
   const props = createProps({
     areWeAdmin: true,
+  });
+  return <ContactModal {...props} />;
+});
+
+story.add('As admin with no group link', () => {
+  const props = createProps({
+    areWeAdmin: true,
+    conversation: {
+      ...defaultGroup,
+      groupLink: undefined,
+    },
   });
   return <ContactModal {...props} />;
 });
@@ -81,6 +104,14 @@ story.add('Viewing self', () => {
       ...defaultContact,
       isMe: true,
     },
+  });
+
+  return <ContactModal {...props} />;
+});
+
+story.add('With badges', () => {
+  const props = createProps({
+    badges: getFakeBadges(2),
   });
 
   return <ContactModal {...props} />;

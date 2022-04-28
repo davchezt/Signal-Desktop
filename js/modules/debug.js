@@ -17,7 +17,7 @@ const {
   sample,
 } = require('lodash');
 
-const Attachments = require('../../app/attachments');
+const Attachments = require('../../ts/windows/attachments');
 const Message = require('./types/message');
 const { sleep } = require('../../ts/util/sleep');
 
@@ -58,9 +58,11 @@ exports.createConversation = async ({
   await Promise.all(
     range(0, numMessages).map(async index => {
       await sleep(index * 100);
-      window.SignalWindow.log.info(`Create message ${index + 1}`);
+      window.SignalContext.log.info(`Create message ${index + 1}`);
       const message = await createRandomMessage({ conversationId });
-      return Signal.Data.saveMessage(message);
+      return Signal.Data.saveMessage(message, {
+        ourUuid: window.textsecure.storage.user.getCheckedUuid().toString(),
+      });
     })
   );
 };
@@ -110,7 +112,7 @@ const createRandomMessage = async ({ conversationId } = {}) => {
   const message = _createMessage({ commonProperties, conversationId, type });
   return Message.initializeSchemaVersion({
     message,
-    logger: window.SignalWindow.log,
+    logger: window.SignalContext.log,
   });
 };
 

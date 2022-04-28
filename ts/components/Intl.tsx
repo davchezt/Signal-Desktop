@@ -3,8 +3,8 @@
 
 import React from 'react';
 
-import { LocalizerType, RenderTextCallbackType } from '../types/Util';
-import { ReplacementValuesType } from '../types/I18N';
+import type { LocalizerType, RenderTextCallbackType } from '../types/Util';
+import type { ReplacementValuesType } from '../types/I18N';
 import * as log from '../logging/log';
 
 export type FullJSXType = Array<JSX.Element | string> | JSX.Element | string;
@@ -67,8 +67,13 @@ export class Intl extends React.Component<Props> {
   }
 
   // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
-  public render() {
+  public override render() {
     const { components, id, i18n, renderText } = this.props;
+
+    if (!id) {
+      log.error('Error: Intl id prop not provided');
+      return null;
+    }
 
     const text = i18n(id);
     const results: Array<

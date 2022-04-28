@@ -4,7 +4,11 @@
 import path from 'path';
 
 import * as log from '../logging/log';
-import { AttachmentType } from '../types/Attachment';
+import type {
+  AttachmentDraftType,
+  InMemoryAttachmentDraftType,
+} from '../types/Attachment';
+import { getMaximumAttachmentSize } from '../types/Attachment';
 import { AttachmentToastType } from '../types/AttachmentToastType';
 import { fileToBytes } from './fileToBytes';
 import { handleImageAttachment } from './handleImageAttachment';
@@ -14,7 +18,9 @@ import { isFileDangerous } from './isFileDangerous';
 import { isHeic, isImage, stringToMIMEType } from '../types/MIME';
 import { isImageTypeSupported, isVideoTypeSupported } from './GoogleChrome';
 
-export function getPendingAttachment(file: File): AttachmentType | undefined {
+export function getPendingAttachment(
+  file: File
+): AttachmentDraftType | undefined {
   if (!file) {
     return;
   }
@@ -25,6 +31,7 @@ export function getPendingAttachment(file: File): AttachmentType | undefined {
   return {
     contentType: fileType,
     fileName,
+    size: file.size,
     path: file.name,
     pending: true,
   };
@@ -32,14 +39,13 @@ export function getPendingAttachment(file: File): AttachmentType | undefined {
 
 export function preProcessAttachment(
   file: File,
-  draftAttachments: Array<AttachmentType>
+  draftAttachments: Array<AttachmentDraftType>
 ): AttachmentToastType | undefined {
   if (!file) {
     return;
   }
 
-  const MB = 1000 * 1024;
-  if (file.size > 100 * MB) {
+  if (file.size > getMaximumAttachmentSize()) {
     return AttachmentToastType.ToastFileSize;
   }
 
@@ -52,7 +58,7 @@ export function preProcessAttachment(
   }
 
   const haveNonImage = draftAttachments.some(
-    (attachment: AttachmentType) => !isImage(attachment.contentType)
+    (attachment: AttachmentDraftType) => !isImage(attachment.contentType)
   );
   // You can't add another attachment if you already have a non-image staged
   if (haveNonImage) {
@@ -71,12 +77,12 @@ export function preProcessAttachment(
 
 export async function processAttachment(
   file: File
-): Promise<AttachmentType | void> {
+): Promise<InMemoryAttachmentDraftType | void> {
   const fileType = stringToMIMEType(file.type);
 
-  let attachment: AttachmentType;
+  let attachment: InMemoryAttachmentDraftType;
   try {
-    if (isImageTypeSupported(fileType) || isHeic(fileType)) {
+    if (isImageTypeSupported(fileType) || isHeic(fileType, file.name)) {
       attachment = await handleImageAttachment(file);
     } else if (isVideoTypeSupported(fileType)) {
       attachment = await handleVideoAttachment(file);

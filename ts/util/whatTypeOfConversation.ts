@@ -1,8 +1,8 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { ConversationAttributesType } from '../model-types.d';
-import { ConversationType } from '../state/ducks/conversations';
+import type { ConversationAttributesType } from '../model-types.d';
+import type { ConversationType } from '../state/ducks/conversations';
 import * as Bytes from '../Bytes';
 import * as log from '../logging/log';
 
@@ -28,6 +28,15 @@ export function isMe(conversationAttrs: ConversationAttributesType): boolean {
   const ourNumber = window.textsecure.storage.user.getNumber();
   const ourUuid = window.textsecure.storage.user.getUuid()?.toString();
   return Boolean((e164 && e164 === ourNumber) || (uuid && uuid === ourUuid));
+}
+
+export function isGroup(
+  conversationAttrs: Pick<
+    ConversationAttributesType,
+    'groupId' | 'groupVersion'
+  >
+): boolean {
+  return isGroupV2(conversationAttrs) || isGroupV1(conversationAttrs);
 }
 
 export function isGroupV1(

@@ -4,10 +4,10 @@
 /* eslint-disable max-classes-per-file */
 
 import { Collection, Model } from 'backbone';
-import { MessageModel } from '../models/messages';
+import type { MessageModel } from '../models/messages';
 import * as log from '../logging/log';
 
-type ViewOnceOpenSyncAttributesType = {
+export type ViewOnceOpenSyncAttributesType = {
   source?: string;
   sourceUuid: string;
   timestamp: number;
@@ -57,16 +57,13 @@ export class ViewOnceOpenSyncs extends Collection<ViewOnceOpenSyncModel> {
   async onSync(sync: ViewOnceOpenSyncModel): Promise<void> {
     try {
       const messages = await window.Signal.Data.getMessagesBySentAt(
-        sync.get('timestamp'),
-        {
-          MessageCollection: window.Whisper.MessageCollection,
-        }
+        sync.get('timestamp')
       );
 
       const found = messages.find(item => {
-        const itemSourceUuid = item.get('sourceUuid');
+        const itemSourceUuid = item.sourceUuid;
         const syncSourceUuid = sync.get('sourceUuid');
-        const itemSource = item.get('source');
+        const itemSource = item.source;
         const syncSource = sync.get('source');
 
         return Boolean(

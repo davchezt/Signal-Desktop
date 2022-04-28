@@ -1,12 +1,12 @@
-// Copyright 2018-2020 Signal Messenger, LLC
+// Copyright 2018-2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import React from 'react';
 
 import LinkifyIt from 'linkify-it';
 
-import { RenderTextCallbackType } from '../../types/Util';
-import { isLinkSneaky } from '../../types/LinkPreview';
+import type { RenderTextCallbackType } from '../../types/Util';
+import { isLinkSneaky, shouldLinkifyMessage } from '../../types/LinkPreview';
 import { splitByEmoji } from '../../util/emoji';
 import { missingCaseError } from '../../util/missingCaseError';
 
@@ -326,12 +326,16 @@ export class Linkify extends React.Component<Props> {
     renderNonLink: ({ text }) => text,
   };
 
-  public render():
+  public override render():
     | JSX.Element
     | string
     | null
     | Array<JSX.Element | string | null> {
     const { text, renderNonLink } = this.props;
+
+    if (!shouldLinkifyMessage(text)) {
+      return text;
+    }
 
     // We have to do this, because renderNonLink is not required in our Props object,
     //  but it is always provided via defaultProps.

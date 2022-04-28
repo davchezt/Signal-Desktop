@@ -3,12 +3,14 @@
 
 import React from 'react';
 
-import { LocalizerType } from '../../../types/Util';
+import type { LocalizerType, ThemeType } from '../../../types/Util';
+
 import { Avatar } from '../../Avatar';
 import { Emojify } from '../Emojify';
 
-import { ConversationDetailsIcon } from './ConversationDetailsIcon';
-import { ConversationType } from '../../../state/ducks/conversations';
+import { ConversationDetailsIcon, IconType } from './ConversationDetailsIcon';
+import type { ConversationType } from '../../../state/ducks/conversations';
+import type { PreferredBadgeSelectorType } from '../../../state/selectors/badges';
 import { PanelRow } from './PanelRow';
 import { PanelSection } from './PanelSection';
 
@@ -20,11 +22,13 @@ export type GroupV2Membership = {
 export type Props = {
   canAddNewMembers: boolean;
   conversationId: string;
+  getPreferredBadge: PreferredBadgeSelectorType;
   i18n: LocalizerType;
   maxShownMemberCount?: number;
   memberships: Array<GroupV2Membership>;
-  showContactModal: (contactId: string, conversationId: string) => void;
+  showContactModal: (contactId: string, conversationId?: string) => void;
   startAddingNewMembers?: () => void;
+  theme: ThemeType;
 };
 
 const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
@@ -69,11 +73,13 @@ function sortMemberships(
 export const ConversationDetailsMembershipList: React.ComponentType<Props> = ({
   canAddNewMembers,
   conversationId,
+  getPreferredBadge,
   i18n,
   maxShownMemberCount = 5,
   memberships,
   showContactModal,
   startAddingNewMembers,
+  theme,
 }) => {
   const [showAllMembers, setShowAllMembers] = React.useState<boolean>(false);
   const sortedMemberships = sortMemberships(memberships);
@@ -94,7 +100,7 @@ export const ConversationDetailsMembershipList: React.ComponentType<Props> = ({
       {canAddNewMembers && (
         <PanelRow
           icon={
-            <div className="module-conversation-details-membership-list__add-members-icon" />
+            <div className="ConversationDetails-membership-list__add-members-icon" />
           }
           label={i18n('ConversationDetailsMembershipList--add-members')}
           onClick={() => startAddingNewMembers?.()}
@@ -107,8 +113,10 @@ export const ConversationDetailsMembershipList: React.ComponentType<Props> = ({
           icon={
             <Avatar
               conversationType="direct"
+              badge={getPreferredBadge(member.badges)}
               i18n={i18n}
               size={32}
+              theme={theme}
               {...member}
             />
           }
@@ -118,11 +126,11 @@ export const ConversationDetailsMembershipList: React.ComponentType<Props> = ({
       ))}
       {showAllMembers === false && shouldHideRestMembers && (
         <PanelRow
-          className="module-conversation-details-membership-list--show-all"
+          className="ConversationDetails-membership-list--show-all"
           icon={
             <ConversationDetailsIcon
               ariaLabel={i18n('ConversationDetailsMembershipList--show-all')}
-              icon="down"
+              icon={IconType.down}
             />
           }
           onClick={() => setShowAllMembers(true)}

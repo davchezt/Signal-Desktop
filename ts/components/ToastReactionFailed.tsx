@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import React from 'react';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 import { Toast } from './Toast';
 
 type PropsType = {
@@ -14,9 +14,5 @@ export const ToastReactionFailed = ({
   i18n,
   onClose,
 }: PropsType): JSX.Element => {
-  return (
-    <Toast onClick={onClose} onClose={onClose}>
-      {i18n('Reactions--error')}
-    </Toast>
-  );
+  return <Toast onClose={onClose}>{i18n('Reactions--error')}</Toast>;
 };

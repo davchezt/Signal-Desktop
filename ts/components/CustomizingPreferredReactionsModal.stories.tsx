@@ -1,7 +1,8 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import React, { ComponentProps } from 'react';
+import type { ComponentProps } from 'react';
+import React from 'react';
 
 import { storiesOf } from '@storybook/react';
 import { action } from '@storybook/addon-actions';
@@ -16,27 +17,26 @@ const story = storiesOf(
   module
 );
 
-const defaultProps: ComponentProps<
-  typeof CustomizingPreferredReactionsModal
-> = {
-  cancelCustomizePreferredReactionsModal: action(
-    'cancelCustomizePreferredReactionsModal'
-  ),
-  deselectDraftEmoji: action('deselectDraftEmoji'),
-  draftPreferredReactions: ['✨', '❇️', '🎇', '🦈', '💖', '🅿️'],
-  hadSaveError: false,
-  i18n,
-  isSaving: false,
-  onSetSkinTone: action('onSetSkinTone'),
-  originalPreferredReactions: ['❤️', '👍', '👎', '😂', '😮', '😢'],
-  recentEmojis: ['cake'],
-  replaceSelectedDraftEmoji: action('replaceSelectedDraftEmoji'),
-  resetDraftEmoji: action('resetDraftEmoji'),
-  savePreferredReactions: action('savePreferredReactions'),
-  selectDraftEmojiToBeReplaced: action('selectDraftEmojiToBeReplaced'),
-  selectedDraftEmojiIndex: undefined,
-  skinTone: 4,
-};
+const defaultProps: ComponentProps<typeof CustomizingPreferredReactionsModal> =
+  {
+    cancelCustomizePreferredReactionsModal: action(
+      'cancelCustomizePreferredReactionsModal'
+    ),
+    deselectDraftEmoji: action('deselectDraftEmoji'),
+    draftPreferredReactions: ['✨', '❇️', '🎇', '🦈', '💖', '🅿️'],
+    hadSaveError: false,
+    i18n,
+    isSaving: false,
+    onSetSkinTone: action('onSetSkinTone'),
+    originalPreferredReactions: ['❤️', '👍', '👎', '😂', '😮', '😢'],
+    recentEmojis: ['cake'],
+    replaceSelectedDraftEmoji: action('replaceSelectedDraftEmoji'),
+    resetDraftEmoji: action('resetDraftEmoji'),
+    savePreferredReactions: action('savePreferredReactions'),
+    selectDraftEmojiToBeReplaced: action('selectDraftEmojiToBeReplaced'),
+    selectedDraftEmojiIndex: undefined,
+    skinTone: 4,
+  };
 
 story.add('Default', () => (
   <CustomizingPreferredReactionsModal {...defaultProps} />

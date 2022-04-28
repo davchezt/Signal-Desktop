@@ -1,11 +1,12 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import React, { MouseEvent, useEffect, useState } from 'react';
+import type { MouseEvent } from 'react';
+import React, { useEffect, useState } from 'react';
 import { noop } from 'lodash';
-import { AvatarDataType } from '../types/Avatar';
+import type { AvatarDataType } from '../types/Avatar';
 import { BetterAvatarBubble } from './BetterAvatarBubble';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 import { Spinner } from './Spinner';
 import { avatarDataToBytes } from '../util/avatarDataToBytes';
 
@@ -94,7 +95,7 @@ export const BetterAvatar = ({
       style={{
         backgroundImage: avatarURL ? `url(${avatarURL})` : undefined,
         backgroundSize: size,
-        // +8 so that the size is the acutal size we want, 8 is the invisible
+        // +8 so that the size is the actual size we want, 8 is the invisible
         // padding around the bubble to make room for the selection border
         height: size + 8,
         width: size + 8,

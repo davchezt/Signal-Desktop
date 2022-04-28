@@ -22,7 +22,7 @@ function respond(seq: number, error: Error | undefined, response?: any) {
   const wrappedResponse: WrappedWorkerResponse = {
     type: 'response',
     seq,
-    error: error ? error.stack : undefined,
+    error: error?.stack,
     response,
   };
   port.postMessage(wrappedResponse);

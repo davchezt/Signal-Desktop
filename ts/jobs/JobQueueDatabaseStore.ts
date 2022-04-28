@@ -4,7 +4,7 @@
 import { noop } from 'lodash';
 import { AsyncQueue } from '../util/AsyncQueue';
 import { concat, wrapPromise } from '../util/asyncIterables';
-import { JobQueueStore, StoredJob } from './types';
+import type { JobQueueStore, StoredJob } from './types';
 import { formatJobForInsert } from './formatJobForInsert';
 import databaseInterface from '../sql/Client';
 import * as log from '../logging/log';
@@ -26,9 +26,7 @@ export class JobQueueDatabaseStore implements JobQueueStore {
 
   async insert(
     job: Readonly<StoredJob>,
-    {
-      shouldInsertIntoDatabase = true,
-    }: Readonly<{ shouldInsertIntoDatabase?: boolean }> = {}
+    { shouldPersist = true }: Readonly<{ shouldPersist?: boolean }> = {}
   ): Promise<void> {
     log.info(
       `JobQueueDatabaseStore adding job ${job.id} to queue ${JSON.stringify(
@@ -46,7 +44,7 @@ export class JobQueueDatabaseStore implements JobQueueStore {
     }
     await initialFetchPromise;
 
-    if (shouldInsertIntoDatabase) {
+    if (shouldPersist) {
       await this.db.insertJob(formatJobForInsert(job));
     }
 

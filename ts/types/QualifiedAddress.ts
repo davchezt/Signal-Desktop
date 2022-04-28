@@ -3,8 +3,10 @@
 
 import { strictAssert } from '../util/assert';
 
-import { UUID, UUIDStringType } from './UUID';
-import { Address, AddressStringType } from './Address';
+import type { UUIDStringType } from './UUID';
+import { UUID } from './UUID';
+import type { AddressStringType } from './Address';
+import { Address } from './Address';
 
 const QUALIFIED_ADDRESS_REGEXP = /^([0-9a-f-]+):([0-9a-f-]+).(\d+)$/i;
 
@@ -14,7 +16,8 @@ export type QualifiedAddressCreateOptionsType = Readonly<{
   deviceId: number;
 }>;
 
-export type QualifiedAddressStringType = `${UUIDStringType}:${AddressStringType}`;
+export type QualifiedAddressStringType =
+  `${UUIDStringType}:${AddressStringType}`;
 
 export class QualifiedAddress {
   constructor(

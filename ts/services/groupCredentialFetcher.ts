@@ -2,18 +2,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { last, sortBy } from 'lodash';
-import { AuthCredentialResponse } from 'zkgroup';
+import { AuthCredentialResponse } from '@signalapp/libsignal-client/zkgroup';
 
-import {
-  base64ToCompatArray,
-  compatArrayToBase64,
-  getClientZkAuthOperations,
-} from '../util/zkgroup';
+import { getClientZkAuthOperations } from '../util/zkgroup';
 
-import { GroupCredentialType } from '../textsecure/WebAPI';
+import type { GroupCredentialType } from '../textsecure/WebAPI';
 import * as durations from '../util/durations';
 import { BackOff } from '../util/BackOff';
 import { sleep } from '../util/sleep';
+import { UUIDKind } from '../types/UUID';
 import * as log from '../logging/log';
 
 export const GROUP_CREDENTIALS_KEY = 'groupCredentials';
@@ -146,14 +143,14 @@ export async function maybeFetchNewCredentials(): Promise<void> {
     serverPublicParamsBase64
   );
   const newCredentials = sortCredentials(
-    await accountManager.getGroupCredentials(startDay, endDay)
+    await accountManager.getGroupCredentials(startDay, endDay, UUIDKind.ACI)
   ).map((item: GroupCredentialType) => {
     const authCredential = clientZKAuthOperations.receiveAuthCredential(
       uuid,
       item.redemptionTime,
-      new AuthCredentialResponse(base64ToCompatArray(item.credential))
+      new AuthCredentialResponse(Buffer.from(item.credential, 'base64'))
     );
-    const credential = compatArrayToBase64(authCredential.serialize());
+    const credential = authCredential.serialize().toString('base64');
 
     return {
       redemptionTime: item.redemptionTime,

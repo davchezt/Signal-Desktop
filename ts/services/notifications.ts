@@ -7,6 +7,7 @@ import { Sound } from '../util/Sound';
 import {
   AudioNotificationSupport,
   getAudioNotificationSupport,
+  shouldHideExpiringMessageBody,
 } from '../types/Settings';
 import * as OS from '../OS';
 import * as log from '../logging/log';
@@ -15,7 +16,7 @@ import { missingCaseError } from '../util/missingCaseError';
 import type { StorageInterface } from '../types/Storage.d';
 import type { LocalizerType } from '../types/Util';
 
-type NotificationDataType = {
+type NotificationDataType = Readonly<{
   conversationId: string;
   messageId: string;
   senderTitle: string;
@@ -27,7 +28,8 @@ type NotificationDataType = {
     targetAuthorUuid: string;
     targetTimestamp: number;
   };
-};
+  wasShown?: boolean;
+}>;
 
 // The keys and values don't match here. This is because the values correspond to old
 //   setting names. In the future, we may wish to migrate these to match.
@@ -79,6 +81,7 @@ class NotificationService extends EventEmitter {
     i18n,
     storage,
   }: Readonly<{ i18n: LocalizerType; storage: StorageInterface }>): void {
+    log.info('NotificationService initialized');
     this.i18n = i18n;
     this.storage = storage;
   }
@@ -109,7 +112,10 @@ class NotificationService extends EventEmitter {
    * A higher-level wrapper around `window.Notification`. You may prefer to use `notify`,
    * which doesn't check permissions, do any filtering, etc.
    */
-  public add(notificationData: NotificationDataType): void {
+  public add(notificationData: Omit<NotificationDataType, 'wasShown'>): void {
+    log.info(
+      'NotificationService: adding a notification and requesting an update'
+    );
     this.notificationData = notificationData;
     this.update();
   }
@@ -131,6 +137,8 @@ class NotificationService extends EventEmitter {
     silent: boolean;
     title: string;
   }>): void {
+    log.info('NotificationService: showing a notification');
+
     this.lastNotification?.close();
 
     const audioNotificationSupport = getAudioNotificationSupport();
@@ -172,6 +180,7 @@ class NotificationService extends EventEmitter {
     targetTimestamp?: number;
   }>): void {
     if (!this.notificationData) {
+      log.info('NotificationService#removeBy: no notification data');
       return;
     }
 
@@ -180,9 +189,11 @@ class NotificationService extends EventEmitter {
       conversationId &&
       this.notificationData.conversationId === conversationId
     ) {
+      log.info('NotificationService#removeBy: conversation ID matches');
       shouldClear = true;
     }
     if (messageId && this.notificationData.messageId === messageId) {
+      log.info('NotificationService#removeBy: message ID matches');
       shouldClear = true;
     }
 
@@ -225,7 +236,13 @@ class NotificationService extends EventEmitter {
     const shouldShowNotification =
       this.isEnabled && !isAppFocused && notificationData;
     if (!shouldShowNotification) {
-      log.info('Not updating notifications');
+      log.info(
+        `NotificationService not updating notifications. Notifications are ${
+          this.isEnabled ? 'enabled' : 'disabled'
+        }; app is ${isAppFocused ? '' : 'not '}focused; there is ${
+          notificationData ? '' : 'no '
+        }notification data`
+      );
       if (isAppFocused) {
         this.notificationData = null;
       }
@@ -241,7 +258,7 @@ class NotificationService extends EventEmitter {
       true
     );
     if (shouldDrawAttention) {
-      log.info('Drawing attention');
+      log.info('NotificationService: drawing attention');
       window.drawAttention();
     }
 
@@ -256,20 +273,28 @@ class NotificationService extends EventEmitter {
       message,
       isExpiringMessage,
       reaction,
+      wasShown,
     } = notificationData;
+
+    if (wasShown) {
+      log.info(
+        'NotificationService: not showing a notification because it was already shown'
+      );
+      return;
+    }
 
     switch (userSetting) {
       case NotificationSetting.Off:
-        log.info('Not showing a notification because user has disabled it');
+        log.info(
+          'NotificationService: not showing a notification because user has disabled it'
+        );
         return;
       case NotificationSetting.NameOnly:
       case NotificationSetting.NameAndMessage: {
         notificationTitle = senderTitle;
         ({ notificationIconUrl } = notificationData);
 
-        const shouldHideExpiringMessageBody =
-          isExpiringMessage && (OS.isMacOS() || OS.isWindows());
-        if (shouldHideExpiringMessageBody) {
+        if (isExpiringMessage && shouldHideExpiringMessageBody()) {
           notificationMessage = i18n('newMessage');
         } else if (userSetting === NotificationSetting.NameOnly) {
           if (reaction) {
@@ -302,7 +327,12 @@ class NotificationService extends EventEmitter {
         break;
     }
 
-    log.info('Showing a notification');
+    log.info('NotificationService: requesting a notification to be shown');
+
+    this.notificationData = {
+      ...notificationData,
+      wasShown: true,
+    };
 
     this.notify({
       title: notificationTitle,
@@ -322,7 +352,9 @@ class NotificationService extends EventEmitter {
   }
 
   public clear(): void {
-    window.SignalWindow.log.info('Removing notification');
+    log.info(
+      'NotificationService: clearing notification and requesting an update'
+    );
     this.notificationData = null;
     this.update();
   }
@@ -331,11 +363,13 @@ class NotificationService extends EventEmitter {
   //   least try to remove the notification immediately instead of waiting for the
   //   normal debounce.
   public fastClear(): void {
+    log.info('NotificationService: clearing notification and updating');
     this.notificationData = null;
     this.fastUpdate();
   }
 
   public enable(): void {
+    log.info('NotificationService: enabling');
     const needUpdate = !this.isEnabled;
     this.isEnabled = true;
     if (needUpdate) {
@@ -344,6 +378,7 @@ class NotificationService extends EventEmitter {
   }
 
   public disable(): void {
+    log.info('NotificationService: disabling');
     this.isEnabled = false;
   }
 }

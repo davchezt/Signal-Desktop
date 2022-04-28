@@ -1,17 +1,18 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { WebAPICredentials } from '../Types.d';
+import type { WebAPICredentials } from '../Types.d';
 
 import { strictAssert } from '../../util/assert';
-import { StorageInterface } from '../../types/Storage.d';
-import { UUID } from '../../types/UUID';
+import type { StorageInterface } from '../../types/Storage.d';
+import { UUID, UUIDKind } from '../../types/UUID';
 import * as log from '../../logging/log';
 
 import Helpers from '../Helpers';
 
 export type SetCredentialsOptions = {
-  uuid?: string;
+  uuid: string;
+  pni: string;
   number: string;
   deviceId: number;
   deviceName?: string;
@@ -58,16 +59,45 @@ export class User {
     return Helpers.unencodeNumber(numberId)[0];
   }
 
-  public getUuid(): UUID | undefined {
+  public getUuid(uuidKind = UUIDKind.ACI): UUID | undefined {
+    if (uuidKind === UUIDKind.PNI) {
+      const pni = this.storage.get('pni');
+      if (pni === undefined) return undefined;
+      return new UUID(pni);
+    }
+
+    strictAssert(
+      uuidKind === UUIDKind.ACI,
+      `Unsupported uuid kind: ${uuidKind}`
+    );
     const uuid = this.storage.get('uuid_id');
     if (uuid === undefined) return undefined;
     return new UUID(Helpers.unencodeNumber(uuid.toLowerCase())[0]);
   }
 
-  public getCheckedUuid(): UUID {
-    const uuid = this.getUuid();
+  public getCheckedUuid(uuidKind?: UUIDKind): UUID {
+    const uuid = this.getUuid(uuidKind);
     strictAssert(uuid !== undefined, 'Must have our own uuid');
     return uuid;
+  }
+
+  public async setPni(pni: string): Promise<void> {
+    await this.storage.put('pni', UUID.cast(pni));
+  }
+
+  public getOurUuidKind(uuid: UUID): UUIDKind {
+    const ourUuid = this.getUuid();
+
+    if (ourUuid?.toString() === uuid.toString()) {
+      return UUIDKind.ACI;
+    }
+
+    const pni = this.getUuid(UUIDKind.PNI);
+    if (pni?.toString() === uuid.toString()) {
+      return UUIDKind.PNI;
+    }
+
+    return UUIDKind.Unknown;
   }
 
   public getDeviceId(): number | undefined {
@@ -97,12 +127,13 @@ export class User {
   public async setCredentials(
     credentials: SetCredentialsOptions
   ): Promise<void> {
-    const { uuid, number, deviceId, deviceName, password } = credentials;
+    const { uuid, pni, number, deviceId, deviceName, password } = credentials;
 
     await Promise.all([
       this.storage.put('number_id', `${number}.${deviceId}`),
       this.storage.put('uuid_id', `${uuid}.${deviceId}`),
       this.storage.put('password', password),
+      this.setPni(pni),
       deviceName
         ? this.storage.put('device_name', deviceName)
         : Promise.resolve(),

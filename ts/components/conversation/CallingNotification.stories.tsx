@@ -1,4 +1,4 @@
-// Copyright 2021 Signal Messenger, LLC
+// Copyright 2021-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import * as React from 'react';
@@ -18,9 +18,9 @@ const story = storiesOf('Components/Conversation/CallingNotification', module);
 const getCommonProps = () => ({
   conversationId: 'fake-conversation-id',
   i18n,
+  isNextItemCallingNotification: false,
   messageId: 'fake-message-id',
-  messageSizeChanged: action('messageSizeChanged'),
-  nextItem: undefined,
+  now: Date.now(),
   returnToActiveCall: action('returnToActiveCall'),
   startCallingLobby: action('startCallingLobby'),
 });
@@ -70,7 +70,7 @@ story.add('Two incoming direct calls back-to-back', () => {
       <CallingNotification
         {...getCommonProps()}
         {...call1}
-        nextItem={{ type: 'callHistory', data: call2 }}
+        isNextItemCallingNotification
       />
       <CallingNotification {...getCommonProps()} {...call2} />
     </>
@@ -99,7 +99,7 @@ story.add('Two outgoing direct calls back-to-back', () => {
       <CallingNotification
         {...getCommonProps()}
         {...call1}
-        nextItem={{ type: 'callHistory', data: call2 }}
+        isNextItemCallingNotification
       />
       <CallingNotification {...getCommonProps()} {...call2} />
     </>

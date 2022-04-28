@@ -1,13 +1,15 @@
 // Copyright 2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import React, { CSSProperties, useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
+import React, { useEffect, useState } from 'react';
 import { noop } from 'lodash';
 
 import * as log from '../logging/log';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 import { Spinner } from './Spinner';
-import { AvatarColors, AvatarColorType } from '../types/Colors';
+import type { AvatarColorType } from '../types/Colors';
+import { AvatarColors } from '../types/Colors';
 import { getInitials } from '../util/getInitials';
 import { imagePathToBytes } from '../util/imagePathToBytes';
 
@@ -44,10 +46,6 @@ export const AvatarPreview = ({
   onClick,
   style = {},
 }: PropsType): JSX.Element => {
-  const startingAvatarPathRef = useRef<undefined | string>(
-    avatarValue ? undefined : avatarPath
-  );
-
   const [avatarPreview, setAvatarPreview] = useState<Uint8Array | undefined>();
 
   // Loads the initial avatarPath if one is provided, but only if we're in editable mode.
@@ -58,8 +56,7 @@ export const AvatarPreview = ({
       return;
     }
 
-    const startingAvatarPath = startingAvatarPathRef.current;
-    if (!startingAvatarPath) {
+    if (!avatarPath) {
       return noop;
     }
 
@@ -67,14 +64,12 @@ export const AvatarPreview = ({
 
     (async () => {
       try {
-        const buffer = await imagePathToBytes(startingAvatarPath);
+        const buffer = await imagePathToBytes(avatarPath);
         if (shouldCancel) {
           return;
         }
         setAvatarPreview(buffer);
-        if (onAvatarLoaded) {
-          onAvatarLoaded(buffer);
-        }
+        onAvatarLoaded?.(buffer);
       } catch (err) {
         if (shouldCancel) {
           return;
@@ -90,7 +85,7 @@ export const AvatarPreview = ({
     return () => {
       shouldCancel = true;
     };
-  }, [onAvatarLoaded, isEditable]);
+  }, [avatarPath, onAvatarLoaded, isEditable]);
 
   // Ensures that when avatarValue changes we generate new URLs
   useEffect(() => {
@@ -119,9 +114,14 @@ export const AvatarPreview = ({
   }, [avatarPreview]);
 
   let imageStatus: ImageStatus;
+  let encodedPath: string | undefined;
   if (avatarValue && !objectUrl) {
     imageStatus = ImageStatus.Loading;
-  } else if (objectUrl || avatarPath) {
+  } else if (objectUrl) {
+    encodedPath = objectUrl;
+    imageStatus = ImageStatus.HasImage;
+  } else if (avatarPath) {
+    encodedPath = encodeURI(avatarPath);
     imageStatus = ImageStatus.HasImage;
   } else {
     imageStatus = ImageStatus.Nothing;
@@ -129,7 +129,18 @@ export const AvatarPreview = ({
 
   const isLoading = imageStatus === ImageStatus.Loading;
 
-  const clickProps = onClick ? { role: 'button', onClick } : {};
+  const clickProps = onClick
+    ? {
+        role: 'button',
+        onClick,
+        tabIndex: 0,
+        onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            onClick();
+          }
+        },
+      }
+    : {};
   const componentStyle = {
     ...style,
   };
@@ -164,10 +175,10 @@ export const AvatarPreview = ({
         className={`AvatarPreview__avatar AvatarPreview__avatar--${imageStatus}`}
         {...clickProps}
         style={
-          imageStatus === ImageStatus.HasImage
+          imageStatus === ImageStatus.HasImage && encodedPath
             ? {
                 ...componentStyle,
-                backgroundImage: `url('${objectUrl || avatarPath}')`,
+                backgroundImage: `url('${encodedPath}')`,
               }
             : componentStyle
         }

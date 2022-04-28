@@ -1,4 +1,4 @@
-// Copyright 2020 Signal Messenger, LLC
+// Copyright 2020-2021 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
 
 /* eslint-disable max-classes-per-file */
@@ -8,7 +8,7 @@ import Parchment from 'parchment';
 import Quill from 'quill';
 import { render } from 'react-dom';
 import { Emojify } from '../../components/conversation/Emojify';
-import { MentionBlotValue } from '../util';
+import type { MentionBlotValue } from '../util';
 
 declare class QuillEmbed extends Parchment.Embed {
   contentNode: HTMLElement;
@@ -17,13 +17,13 @@ declare class QuillEmbed extends Parchment.Embed {
 const Embed: typeof QuillEmbed = Quill.import('blots/embed');
 
 export class MentionBlot extends Embed {
-  static blotName = 'mention';
+  static override blotName = 'mention';
 
-  static className = 'mention-blot';
+  static override className = 'mention-blot';
 
-  static tagName = 'span';
+  static override tagName = 'span';
 
-  static create(value: MentionBlotValue): Node {
+  static override create(value: MentionBlotValue): Node {
     const node = super.create(undefined) as HTMLElement;
 
     MentionBlot.buildSpan(value, node);
@@ -31,7 +31,7 @@ export class MentionBlot extends Embed {
     return node;
   }
 
-  static value(node: HTMLElement): MentionBlotValue {
+  static override value(node: HTMLElement): MentionBlotValue {
     const { uuid, title } = node.dataset;
     if (uuid === undefined || title === undefined) {
       throw new Error(

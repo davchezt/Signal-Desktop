@@ -1,7 +1,5 @@
-// Copyright 2016-2021 Signal Messenger, LLC
+// Copyright 2016-2022 Signal Messenger, LLC
 // SPDX-License-Identifier: AGPL-3.0-only
-
-/* eslint-disable class-methods-use-this */
 
 import PQueue from 'p-queue';
 import { isNumber } from 'lodash';
@@ -15,12 +13,11 @@ import {
   SenderKeyRecord,
   SessionRecord,
   SignedPreKeyRecord,
-} from '@signalapp/signal-client';
+} from '@signalapp/libsignal-client';
 
 import * as Bytes from './Bytes';
 import { constantTimeEqual } from './Crypto';
 import { assert, strictAssert } from './util/assert';
-import { handleMessageSend } from './util/handleMessageSend';
 import { isNotNil } from './util/isNotNil';
 import { Zone } from './util/Zone';
 import { isMoreRecentThan } from './util/timestamp';
@@ -28,7 +25,7 @@ import {
   sessionRecordToProtobuf,
   sessionStructureToBytes,
 } from './util/sessionTranslation';
-import {
+import type {
   DeviceType,
   IdentityKeyType,
   IdentityKeyIdType,
@@ -46,15 +43,15 @@ import {
   UnprocessedType,
   UnprocessedUpdateType,
 } from './textsecure/Types.d';
-import { getSendOptions } from './util/getSendOptions';
 import type { RemoveAllConfiguration } from './types/RemoveAllConfiguration';
-import { UUID, UUIDStringType } from './types/UUID';
-import { Address } from './types/Address';
-import {
-  QualifiedAddress,
-  QualifiedAddressStringType,
-} from './types/QualifiedAddress';
+import type { UUIDStringType } from './types/UUID';
+import { UUID, UUIDKind } from './types/UUID';
+import type { Address } from './types/Address';
+import type { QualifiedAddressStringType } from './types/QualifiedAddress';
+import { QualifiedAddress } from './types/QualifiedAddress';
 import * as log from './logging/log';
+import { singleProtoJobQueue } from './jobs/singleProtoJobQueue';
+import * as Errors from './types/errors';
 
 const TIMESTAMP_THRESHOLD = 5 * 1000; // 5 seconds
 
@@ -188,12 +185,13 @@ export function freezeSignedPreKey(
 }
 
 // We add a this parameter to avoid an 'implicit any' error on the next line
-const EventsMixin = (function EventsMixin(this: unknown) {
+const EventsMixin = function EventsMixin(this: unknown) {
   window._.assign(this, window.Backbone.Events);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-} as any) as typeof window.Backbone.EventsMixin;
+} as any as typeof window.Backbone.EventsMixin;
 
 type SessionCacheEntry = CacheEntryType<SessionType, SessionRecord>;
+type SenderKeyCacheEntry = CacheEntryType<SenderKeyType, SenderKeyRecord>;
 
 type ZoneQueueEntryType = Readonly<{
   zone: Zone;
@@ -216,10 +214,7 @@ export class SignalProtocolStore extends EventsMixin {
     CacheEntryType<IdentityKeyType, PublicKey>
   >;
 
-  senderKeys?: Map<
-    SenderKeyIdType,
-    CacheEntryType<SenderKeyType, SenderKeyRecord>
-  >;
+  senderKeys?: Map<SenderKeyIdType, SenderKeyCacheEntry>;
 
   sessions?: Map<SessionIdType, SessionCacheEntry>;
 
@@ -241,6 +236,8 @@ export class SignalProtocolStore extends EventsMixin {
   private readonly zoneQueue: Array<ZoneQueueEntryType> = [];
 
   private pendingSessions = new Map<SessionIdType, SessionCacheEntry>();
+
+  private pendingSenderKeys = new Map<SenderKeyIdType, SenderKeyCacheEntry>();
 
   private pendingUnprocessed = new Map<string, UnprocessedType>();
 
@@ -378,7 +375,7 @@ export class SignalProtocolStore extends EventsMixin {
     const id: PreKeyIdType = `${ourUuid.toString()}:${keyId}`;
 
     try {
-      this.trigger('removePreKey');
+      this.trigger('removePreKey', ourUuid);
     } catch (error) {
       log.error(
         'removePreKey error triggering removePreKey:',
@@ -504,7 +501,21 @@ export class SignalProtocolStore extends EventsMixin {
     await window.Signal.Data.removeAllSignedPreKeys();
   }
 
-  // Sender Key Queue
+  // Sender Key
+
+  // Re-entrant sender key transaction routine. Only one sender key transaction could
+  // be running at the same time.
+  //
+  // While in transaction:
+  //
+  // - `saveSenderKey()` adds the updated session to the `pendingSenderKeys`
+  // - `getSenderKey()` looks up the session first in `pendingSenderKeys` and only
+  //   then in the main `senderKeys` store
+  //
+  // When transaction ends:
+  //
+  // - successfully: pending sender key stores are batched into the database
+  // - with an error: pending sender key stores are reverted
 
   async enqueueSenderKeyJob<T>(
     qualifiedAddress: QualifiedAddress,
@@ -519,7 +530,11 @@ export class SignalProtocolStore extends EventsMixin {
   }
 
   private _createSenderKeyQueue(): PQueue {
-    return new PQueue({ concurrency: 1, timeout: 1000 * 60 * 2 });
+    return new PQueue({
+      concurrency: 1,
+      timeout: 1000 * 60 * 2,
+      throwOnTimeout: true,
+    });
   }
 
   private _getSenderKeyQueue(senderId: QualifiedAddress): PQueue {
@@ -533,8 +548,6 @@ export class SignalProtocolStore extends EventsMixin {
     return freshQueue;
   }
 
-  // Sender Keys
-
   private getSenderKeyId(
     senderKeyId: QualifiedAddress,
     distributionId: string
@@ -545,79 +558,94 @@ export class SignalProtocolStore extends EventsMixin {
   async saveSenderKey(
     qualifiedAddress: QualifiedAddress,
     distributionId: string,
-    record: SenderKeyRecord
+    record: SenderKeyRecord,
+    { zone = GLOBAL_ZONE }: SessionTransactionOptions = {}
   ): Promise<void> {
-    if (!this.senderKeys) {
-      throw new Error('saveSenderKey: this.senderKeys not yet cached!');
-    }
+    await this.withZone(zone, 'saveSenderKey', async () => {
+      if (!this.senderKeys) {
+        throw new Error('saveSenderKey: this.senderKeys not yet cached!');
+      }
 
-    const senderId = qualifiedAddress.toString();
+      const senderId = qualifiedAddress.toString();
 
-    try {
-      const id = this.getSenderKeyId(qualifiedAddress, distributionId);
+      try {
+        const id = this.getSenderKeyId(qualifiedAddress, distributionId);
 
-      const fromDB: SenderKeyType = {
-        id,
-        senderId,
-        distributionId,
-        data: record.serialize(),
-        lastUpdatedDate: Date.now(),
-      };
+        const fromDB: SenderKeyType = {
+          id,
+          senderId,
+          distributionId,
+          data: record.serialize(),
+          lastUpdatedDate: Date.now(),
+        };
 
-      await window.Signal.Data.createOrUpdateSenderKey(fromDB);
+        this.pendingSenderKeys.set(id, {
+          hydrated: true,
+          fromDB,
+          item: record,
+        });
 
-      this.senderKeys.set(id, {
-        hydrated: true,
-        fromDB,
-        item: record,
-      });
-    } catch (error) {
-      const errorString = error && error.stack ? error.stack : error;
-      log.error(
-        `saveSenderKey: failed to save senderKey ${senderId}/${distributionId}: ${errorString}`
-      );
-    }
+        // Current zone doesn't support pending sessions - commit immediately
+        if (!zone.supportsPendingSenderKeys()) {
+          await this.commitZoneChanges('saveSenderKey');
+        }
+      } catch (error) {
+        const errorString = error && error.stack ? error.stack : error;
+        log.error(
+          `saveSenderKey: failed to save senderKey ${senderId}/${distributionId}: ${errorString}`
+        );
+      }
+    });
   }
 
   async getSenderKey(
     qualifiedAddress: QualifiedAddress,
-    distributionId: string
+    distributionId: string,
+    { zone = GLOBAL_ZONE }: SessionTransactionOptions = {}
   ): Promise<SenderKeyRecord | undefined> {
-    if (!this.senderKeys) {
-      throw new Error('getSenderKey: this.senderKeys not yet cached!');
-    }
+    return this.withZone(zone, 'getSenderKey', async () => {
+      if (!this.senderKeys) {
+        throw new Error('getSenderKey: this.senderKeys not yet cached!');
+      }
 
-    const senderId = qualifiedAddress.toString();
+      const senderId = qualifiedAddress.toString();
 
-    try {
-      const id = this.getSenderKeyId(qualifiedAddress, distributionId);
+      try {
+        const id = this.getSenderKeyId(qualifiedAddress, distributionId);
 
-      const entry = this.senderKeys.get(id);
-      if (!entry) {
-        log.error('Failed to fetch sender key:', id);
+        const map = this.pendingSenderKeys.has(id)
+          ? this.pendingSenderKeys
+          : this.senderKeys;
+        const entry = map.get(id);
+
+        if (!entry) {
+          log.error('Failed to fetch sender key:', id);
+          return undefined;
+        }
+
+        if (entry.hydrated) {
+          log.info('Successfully fetched sender key (cache hit):', id);
+          return entry.item;
+        }
+
+        const item = SenderKeyRecord.deserialize(
+          Buffer.from(entry.fromDB.data)
+        );
+        this.senderKeys.set(id, {
+          hydrated: true,
+          item,
+          fromDB: entry.fromDB,
+        });
+        log.info('Successfully fetched sender key(cache miss):', id);
+        return item;
+      } catch (error) {
+        const errorString = error && error.stack ? error.stack : error;
+        log.error(
+          `getSenderKey: failed to load sender key ${senderId}/${distributionId}: ${errorString}`
+        );
         return undefined;
       }
-
-      if (entry.hydrated) {
-        log.info('Successfully fetched sender key (cache hit):', id);
-        return entry.item;
-      }
-
-      const item = SenderKeyRecord.deserialize(Buffer.from(entry.fromDB.data));
-      this.senderKeys.set(id, {
-        hydrated: true,
-        item,
-        fromDB: entry.fromDB,
-      });
-      log.info('Successfully fetched sender key(cache miss):', id);
-      return item;
-    } catch (error) {
-      const errorString = error && error.stack ? error.stack : error;
-      log.error(
-        `getSenderKey: failed to load sender key ${senderId}/${distributionId}: ${errorString}`
-      );
-      return undefined;
-    }
+    });
   }
 
   async removeSenderKey(
@@ -644,11 +672,16 @@ export class SignalProtocolStore extends EventsMixin {
     }
   }
 
-  async clearSenderKeyStore(): Promise<void> {
-    if (this.senderKeys) {
-      this.senderKeys.clear();
-    }
-    await window.Signal.Data.removeAllSenderKeys();
+  async removeAllSenderKeys(): Promise<void> {
+    return this.withZone(GLOBAL_ZONE, 'removeAllSenderKeys', async () => {
+      if (this.senderKeys) {
+        this.senderKeys.clear();
+      }
+      if (this.pendingSenderKeys) {
+        this.pendingSenderKeys.clear();
+      }
+      await window.Signal.Data.removeAllSenderKeys();
+    });
   }
 
   // Session Queue
@@ -666,7 +699,11 @@ export class SignalProtocolStore extends EventsMixin {
   }
 
   private _createSessionQueue(): PQueue {
-    return new PQueue({ concurrency: 1, timeout: 1000 * 60 * 2 });
+    return new PQueue({
+      concurrency: 1,
+      timeout: 1000 * 60 * 2,
+      throwOnTimeout: true,
+    });
   }
 
   private _getSessionQueue(id: QualifiedAddress): PQueue {
@@ -695,6 +732,7 @@ export class SignalProtocolStore extends EventsMixin {
   //
   // - successfully: pending session stores are batched into the database
   // - with an error: pending session stores are reverted
+
   public async withZone<T>(
     zone: Zone,
     name: string,
@@ -748,45 +786,66 @@ export class SignalProtocolStore extends EventsMixin {
   }
 
   private async commitZoneChanges(name: string): Promise<void> {
-    const { pendingSessions, pendingUnprocessed } = this;
+    const { pendingSenderKeys, pendingSessions, pendingUnprocessed } = this;
 
-    if (pendingSessions.size === 0 && pendingUnprocessed.size === 0) {
+    if (
+      pendingSenderKeys.size === 0 &&
+      pendingSessions.size === 0 &&
+      pendingUnprocessed.size === 0
+    ) {
       return;
     }
 
     log.info(
-      `commitZoneChanges(${name}): pending sessions ${pendingSessions.size} ` +
+      `commitZoneChanges(${name}): ` +
+        `pending sender keys ${pendingSenderKeys.size}, ` +
+        `pending sessions ${pendingSessions.size}, ` +
         `pending unprocessed ${pendingUnprocessed.size}`
     );
 
+    this.pendingSenderKeys = new Map();
     this.pendingSessions = new Map();
     this.pendingUnprocessed = new Map();
 
-    // Commit both unprocessed and sessions in the same database transaction
-    // to unroll both on error.
-    await window.Signal.Data.commitSessionsAndUnprocessed({
+    // Commit both sender keys, sessions and unprocessed in the same database transaction
+    //   to unroll both on error.
+    await window.Signal.Data.commitDecryptResult({
+      senderKeys: Array.from(pendingSenderKeys.values()).map(
+        ({ fromDB }) => fromDB
+      ),
       sessions: Array.from(pendingSessions.values()).map(
         ({ fromDB }) => fromDB
       ),
       unprocessed: Array.from(pendingUnprocessed.values()),
     });
 
-    const { sessions } = this;
-    assert(sessions !== undefined, "Can't commit unhydrated storage");
-
     // Apply changes to in-memory storage after successful DB write.
+
+    const { sessions } = this;
+    assert(sessions !== undefined, "Can't commit unhydrated session storage");
     pendingSessions.forEach((value, key) => {
       sessions.set(key, value);
+    });
+
+    const { senderKeys } = this;
+    assert(
+      senderKeys !== undefined,
+      "Can't commit unhydrated sender key storage"
+    );
+    pendingSenderKeys.forEach((value, key) => {
+      senderKeys.set(key, value);
     });
   }
 
   private async revertZoneChanges(name: string, error: Error): Promise<void> {
     log.info(
       `revertZoneChanges(${name}): ` +
-        `pending sessions size ${this.pendingSessions.size} ` +
+        `pending sender keys size ${this.pendingSenderKeys.size}, ` +
+        `pending sessions size ${this.pendingSessions.size}, ` +
         `pending unprocessed size ${this.pendingUnprocessed.size}`,
       error && error.stack
     );
+    this.pendingSenderKeys.clear();
     this.pendingSessions.clear();
     this.pendingUnprocessed.clear();
   }
@@ -995,7 +1054,7 @@ export class SignalProtocolStore extends EventsMixin {
           id,
           version: 2,
           ourUuid: qualifiedAddress.ourUuid.toString(),
-          conversationId: new UUID(conversationId).toString(),
+          conversationId,
           uuid: uuid.toString(),
           deviceId,
           record: record.serialize().toString('base64'),
@@ -1036,7 +1095,7 @@ export class SignalProtocolStore extends EventsMixin {
         throw new Error('getOpenDevices: this.sessions not yet cached!');
       }
       if (identifiers.length === 0) {
-        throw new Error('getOpenDevices: No identifiers provided!');
+        return { devices: [], emptyIdentifiers: [] };
       }
 
       try {
@@ -1325,29 +1384,22 @@ export class SignalProtocolStore extends EventsMixin {
       // Archive open session with this device
       await this.archiveSession(qualifiedAddress);
 
-      // Send a null message with newly-created session
-      const sendOptions = await getSendOptions(conversation.attributes);
-      const result = await handleMessageSend(
-        window.textsecure.messaging.sendNullMessage(
-          {
-            uuid: uuid.toString(),
-          },
-          sendOptions
-        ),
-        { messageIds: [], sendType: 'nullMessage' }
+      // Enqueue a null message with newly-created session
+      await singleProtoJobQueue.add(
+        window.textsecure.messaging.getNullMessage({
+          uuid: uuid.toString(),
+        })
       );
-
-      if (result && result.errors && result.errors.length) {
-        throw result.errors[0];
-      }
     } catch (error) {
       // If we failed to do the session reset, then we'll allow another attempt sooner
       //   than one hour from now.
       delete sessionResets[id];
       window.storage.put('sessionResets', sessionResets);
 
-      const errorString = error && error.stack ? error.stack : error;
-      log.error(`lightSessionReset/${id}: Encountered error`, errorString);
+      log.error(
+        `lightSessionReset/${id}: Encountered error`,
+        Errors.toLogFormat(error)
+      );
     }
   }
 
@@ -1395,7 +1447,7 @@ export class SignalProtocolStore extends EventsMixin {
       return undefined;
     }
 
-    const conversationId = new UUID(conversation.id).toString();
+    const conversationId = conversation.id;
     const record = this.identityKeys.get(`conversation:${conversationId}`);
     if (!record) {
       return undefined;
@@ -1630,7 +1682,11 @@ export class SignalProtocolStore extends EventsMixin {
     const identityRecord = await this.getOrMigrateIdentityRecord(uuid);
     const id = uuid.toString();
 
-    window.ConversationController.getOrCreate(id, 'private');
+    // When saving a PNI identity - don't create a separate conversation
+    const uuidKind = window.textsecure.storage.user.getOurUuidKind(uuid);
+    if (uuidKind !== UUIDKind.PNI) {
+      window.ConversationController.getOrCreate(id, 'private');
+    }
 
     const updates: Partial<IdentityKeyType> = {
       ...identityRecord,
@@ -1672,9 +1728,6 @@ export class SignalProtocolStore extends EventsMixin {
     if (!validateVerifiedStatus(verifiedStatus)) {
       throw new Error('setVerified: Invalid verified status');
     }
-    if (arguments.length > 2 && !(publicKey instanceof Uint8Array)) {
-      throw new Error('setVerified: Invalid public key');
-    }
 
     const identityRecord = await this.getOrMigrateIdentityRecord(uuid);
 
@@ -1711,84 +1764,8 @@ export class SignalProtocolStore extends EventsMixin {
     return VerifiedStatus.DEFAULT;
   }
 
-  // Resolves to true if a new identity key was saved
-  processContactSyncVerificationState(
-    uuid: UUID,
-    verifiedStatus: number,
-    publicKey: Uint8Array
-  ): Promise<boolean> {
-    if (verifiedStatus === VerifiedStatus.UNVERIFIED) {
-      return this.processUnverifiedMessage(uuid, verifiedStatus, publicKey);
-    }
-    return this.processVerifiedMessage(uuid, verifiedStatus, publicKey);
-  }
-
-  // This function encapsulates the non-Java behavior, since the mobile apps don't
-  //   currently receive contact syncs and therefore will see a verify sync with
-  //   UNVERIFIED status
-  async processUnverifiedMessage(
-    uuid: UUID,
-    verifiedStatus: number,
-    publicKey?: Uint8Array
-  ): Promise<boolean> {
-    if (uuid === null || uuid === undefined) {
-      throw new Error('processUnverifiedMessage: uuid was undefined/null');
-    }
-    if (publicKey !== undefined && !(publicKey instanceof Uint8Array)) {
-      throw new Error('processUnverifiedMessage: Invalid public key');
-    }
-
-    const identityRecord = await this.getOrMigrateIdentityRecord(uuid);
-
-    let isEqual = false;
-
-    if (identityRecord && publicKey) {
-      isEqual = constantTimeEqual(publicKey, identityRecord.publicKey);
-    }
-
-    if (
-      identityRecord &&
-      isEqual &&
-      identityRecord.verified !== VerifiedStatus.UNVERIFIED
-    ) {
-      await this.setVerified(uuid, verifiedStatus, publicKey);
-      return false;
-    }
-
-    if (!identityRecord || !isEqual) {
-      await this.saveIdentityWithAttributes(uuid, {
-        publicKey,
-        verified: verifiedStatus,
-        firstUse: false,
-        timestamp: Date.now(),
-        nonblockingApproval: true,
-      });
-
-      if (identityRecord && !isEqual) {
-        try {
-          this.trigger('keychange', uuid);
-        } catch (error) {
-          log.error(
-            'processUnverifiedMessage: error triggering keychange:',
-            error && error.stack ? error.stack : error
-          );
-        }
-
-        await this.archiveAllSessions(uuid);
-
-        return true;
-      }
-    }
-
-    // The situation which could get us here is:
-    //   1. had a previous key
-    //   2. new key is the same
-    //   3. desired new status is same as what we had before
-    return false;
-  }
-
-  // This matches the Java method as of
-  //   https://github.com/signalapp/Signal-Android/blob/d0bb68e1378f689e4d10ac6a46014164992ca4e4/src/org/thoughtcrime/securesms/util/IdentityUtil.java#L188
+  // See https://github.com/signalapp/Signal-iOS-Private/blob/e32c2dff0d03f67467b4df621d84b11412d50cdb/SignalServiceKit/src/Messages/OWSIdentityManager.m#L317
+  // for reference.
   async processVerifiedMessage(
     uuid: UUID,
     verifiedStatus: number,
@@ -1812,55 +1789,34 @@ export class SignalProtocolStore extends EventsMixin {
       isEqual = constantTimeEqual(publicKey, identityRecord.publicKey);
     }
 
-    if (!identityRecord && verifiedStatus === VerifiedStatus.DEFAULT) {
-      log.info('processVerifiedMessage: No existing record for default status');
-      return false;
-    }
-
-    if (
-      identityRecord &&
-      isEqual &&
-      identityRecord.verified !== VerifiedStatus.DEFAULT &&
-      verifiedStatus === VerifiedStatus.DEFAULT
-    ) {
+    // Just update verified status if the key is the same or not present
+    if (isEqual || !publicKey) {
       await this.setVerified(uuid, verifiedStatus, publicKey);
       return false;
     }
 
-    if (
-      verifiedStatus === VerifiedStatus.VERIFIED &&
-      (!identityRecord ||
-        (identityRecord && !isEqual) ||
-        (identityRecord && identityRecord.verified !== VerifiedStatus.VERIFIED))
-    ) {
-      await this.saveIdentityWithAttributes(uuid, {
-        publicKey,
-        verified: verifiedStatus,
-        firstUse: false,
-        timestamp: Date.now(),
-        nonblockingApproval: true,
-      });
+    await this.saveIdentityWithAttributes(uuid, {
+      publicKey,
+      verified: verifiedStatus,
+      firstUse: false,
+      timestamp: Date.now(),
+      nonblockingApproval: verifiedStatus === VerifiedStatus.VERIFIED,
+    });
 
-      if (identityRecord && !isEqual) {
-        try {
-          this.trigger('keychange', uuid);
-        } catch (error) {
-          log.error(
-            'processVerifiedMessage error triggering keychange:',
-            error && error.stack ? error.stack : error
-          );
-        }
-
-        await this.archiveAllSessions(uuid);
-
-        // true signifies that we overwrote a previous key with a new one
-        return true;
+    if (identityRecord) {
+      try {
+        this.trigger('keychange', uuid);
+      } catch (error) {
+        log.error(
+          'processVerifiedMessage error triggering keychange:',
+          Errors.toLogFormat(error)
+        );
       }
+
+      // true signifies that we overwrote a previous key with a new one
+      return true;
     }
 
-    // We get here if we got a new key and the status is DEFAULT. If the
-    //   message is out of date, we don't want to lose whatever more-secure
-    //   state we had before.
     return false;
   }
 

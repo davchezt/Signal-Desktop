@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import * as log from '../logging/log';
-import { HTTPError } from './Errors';
+import type { HTTPError } from './Errors';
 
 export async function handleStatusCode(status: number): Promise<void> {
   if (status === 499) {
@@ -25,6 +25,7 @@ export function translateError(error: HTTPError): HTTPError | undefined {
         'Failed to connect to the server, please check your network connection.';
       break;
     case 413:
+    case 429:
       message = 'Rate limit exceeded, please try again later.';
       break;
     case 403:

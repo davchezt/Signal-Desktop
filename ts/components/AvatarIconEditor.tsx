@@ -4,11 +4,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 
 import { AvatarColorPicker } from './AvatarColorPicker';
-import { AvatarColorType } from '../types/Colors';
-import { AvatarDataType } from '../types/Avatar';
+import type { AvatarColorType } from '../types/Colors';
+import type { AvatarDataType } from '../types/Avatar';
 import { AvatarModalButtons } from './AvatarModalButtons';
 import { AvatarPreview } from './AvatarPreview';
-import { LocalizerType } from '../types/Util';
+import type { LocalizerType } from '../types/Util';
 import { avatarDataToBytes } from '../util/avatarDataToBytes';
 
 export type PropsType = {
@@ -23,9 +23,8 @@ export const AvatarIconEditor = ({
   onClose,
 }: PropsType): JSX.Element => {
   const [avatarBuffer, setAvatarBuffer] = useState<Uint8Array | undefined>();
-  const [avatarData, setAvatarData] = useState<AvatarDataType>(
-    initialAvatarData
-  );
+  const [avatarData, setAvatarData] =
+    useState<AvatarDataType>(initialAvatarData);
 
   const onColorSelected = useCallback(
     (color: AvatarColorType) => {
